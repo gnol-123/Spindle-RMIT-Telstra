@@ -236,6 +236,11 @@ def build(ctx: EnvContext, get_sandbox: Callable[[], Awaitable[AsyncSandbox]]) -
             await sbx.files.write(path, image.data, user="user")
         except Exception as exc:
             return f"Screenshot failed: {type(exc).__name__}: {exc}"[:1000]
+        if ctx.save_thumbnail is not None:
+            try:
+                await ctx.save_thumbnail(image.data)
+            except Exception as exc:
+                logger.warning("thumbnail save failed: %s", exc)
         return f"Saved screenshot: {path}"
 
     ts = FunctionToolset()

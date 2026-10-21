@@ -261,6 +261,23 @@ class ProjectRepository:
         ).data
         return [Project(id=r["id"], name=r["name"]) for r in rows]
 
+    def latest_thumbnails(self, project_ids: list[str]) -> dict[str, str]:
+        """project_id -> newest thumbnail_path, one query."""
+        if not project_ids:
+            return {}
+        rows = (
+            self._db.table("previews")
+            .select("project_id, thumbnail_path")
+            .in_("project_id", project_ids)
+            .not_.is_("thumbnail_path", "null")
+            .order("created_at", desc=True)
+            .execute()
+        ).data
+        out: dict[str, str] = {}
+        for r in rows:
+            out.setdefault(r["project_id"], r["thumbnail_path"])
+        return out
+
     def get_project(self, project_id: str) -> Project | None:
         rows = (
             self._db.table("projects")

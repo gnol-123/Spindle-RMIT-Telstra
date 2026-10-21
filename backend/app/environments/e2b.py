@@ -333,10 +333,15 @@ def build(ctx: EnvContext) -> AbstractToolset:
             "port": port,
             "path": path or "/",
             "agent_node_id": ctx.agent_node_id,
-            "created_at": datetime.now(UTC).isoformat(),
         }
         try:
-            await workspace.upsert_preview(sbx, entry)
+            if ctx.record_preview is not None:
+                await ctx.record_preview(entry)
+            else:
+                # Outside a turn there is no repository: keep the sandbox file.
+                await workspace.upsert_preview(
+                    sbx, {**entry, "created_at": datetime.now(UTC).isoformat()}
+                )
         except Exception as exc:
             return f"Could not record preview: {type(exc).__name__}: {exc}"[:500]
 

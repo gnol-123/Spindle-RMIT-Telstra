@@ -15,6 +15,7 @@ from app.environments.browser import BROWSER_TOOL_NAMES
 from app.environments.lifecycle import ensure_provisioned
 from app.environments.registry import get_spec
 from app.repositories.environment_repo import EnvNode
+from app.services import previews_storage
 from app.tools.assembly import AssembledTools
 
 # The tools every environment exposes. Named here so the approval backfill
@@ -49,8 +50,41 @@ def _status_writer(env_repo, node_id: str):
     return write
 
 
+def _preview_recorder(preview_repo, project_id: str, node_id: str):
+    """Lets publish_preview write its row without holding a repository."""
+
+    async def record(entry: dict) -> None:
+        await to_thread.run_sync(
+            lambda: preview_repo.upsert(
+                project_id,
+                node_id,
+                entry["port"],
+                entry["path"],
+                entry["title"],
+                entry.get("agent_node_id"),
+            )
+        )
+
+    return record
+
+
+def _thumbnail_saver(preview_repo, project_id: str, node_id: str):
+    """Lets a screenshot become the newest preview's thumbnail."""
+
+    async def save(data: bytes) -> None:
+        row = await to_thread.run_sync(preview_repo.newest_for_env, node_id)
+        if row is None:
+            return
+        path = await to_thread.run_sync(
+            previews_storage.upload_thumbnail, project_id, row.id, data
+        )
+        await to_thread.run_sync(preview_repo.set_thumbnail, row.id, path)
+
+    return save
+
+
 async def assemble_environments(
-    env_repo, nodes: list[EnvNode], *, agent_node_id: str
+    env_repo, nodes: list[EnvNode], *, agent_node_id: str, preview_repo=None
 ) -> AssembledTools:
     """Build one prefixed toolset per reachable environment.
 
@@ -90,6 +124,16 @@ async def assemble_environments(
             status=current.status,
             agent_node_id=agent_node_id,
             set_status=_status_writer(env_repo, current.id),
+            record_preview=(
+                _preview_recorder(preview_repo, current.project_id, current.id)
+                if preview_repo is not None
+                else None
+            ),
+            save_thumbnail=(
+                _thumbnail_saver(preview_repo, current.project_id, current.id)
+                if preview_repo is not None
+                else None
+            ),
         )
         try:
             built = spec.build(ctx)

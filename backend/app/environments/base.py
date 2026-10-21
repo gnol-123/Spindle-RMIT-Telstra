@@ -22,6 +22,12 @@ WORKSPACE_ROOT = "/home/user/workspace"
 # Writes a node's status without the caller holding a repository.
 StatusWriter = Callable[[str, str | None], Awaitable[None]]
 
+# Records a published preview (title, port, path, agent_node_id) in the database.
+PreviewRecorder = Callable[[dict], Awaitable[None]]
+
+# Stores a screenshot as the newest preview's thumbnail.
+ThumbnailSaver = Callable[[bytes], Awaitable[None]]
+
 
 @dataclass(frozen=True)
 class EnvContext:
@@ -36,6 +42,10 @@ class EnvContext:
     agent_node_id: str | None = None
     # Injected by assembly so a tool can flip status without a repository.
     set_status: StatusWriter | None = None
+    # Injected by assembly. None outside a turn.
+    record_preview: PreviewRecorder | None = None
+    # Injected by assembly. None outside a turn.
+    save_thumbnail: ThumbnailSaver | None = None
 
     @property
     def sandbox_id(self) -> str | None:
