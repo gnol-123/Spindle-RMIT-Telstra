@@ -49,6 +49,8 @@ class AgentType:
 class Project:
     id: str
     name: str
+    # Set when the frontend has uploaded a canvas screenshot.
+    canvas_snapshot_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -253,13 +255,35 @@ class ProjectRepository:
     def list_projects(self) -> list[Project]:
         rows = (
             self._db.table("projects")
-            .select("id, name")
+            .select("id, name, canvas_snapshot_at")
             .eq("owner_id", self._user_id)
             .is_("archived_at", "null")
             .order("created_at", desc=True)
             .execute()
         ).data
-        return [Project(id=r["id"], name=r["name"]) for r in rows]
+        return [
+            Project(id=r["id"], name=r["name"], canvas_snapshot_at=r.get("canvas_snapshot_at"))
+            for r in rows
+        ]
+
+    def latest_thumbnails(self, project_ids: list[str]) -> dict[str, str]:
+        """project_id -> newest thumbnail_path, one query."""
+        if not project_ids:
+            return {}
+        rows = (
+            self._db.table("previews")
+            .select("project_id, thumbnail_path")
+            .in_("project_id", project_ids)
+            .not_.is_("thumbnail_path", "null")
+            .order("created_at", desc=True)
+            .execute()
+        ).data
+        out: dict[str, str] = {}
+        for r in rows:
+            # Column is user-writable: only paths under the project's own folder.
+            if r["thumbnail_path"].startswith(f"{r['project_id']}/"):
+                out.setdefault(r["project_id"], r["thumbnail_path"])
+        return out
 
     def get_project(self, project_id: str) -> Project | None:
         rows = (
@@ -271,6 +295,15 @@ class ProjectRepository:
             .execute()
         ).data
         return Project(id=rows[0]["id"], name=rows[0]["name"]) if rows else None
+
+    def set_canvas_snapshot_at(self, project_id: str) -> None:
+        (
+            self._db.table("projects")
+            .update({"canvas_snapshot_at": datetime.now(UTC).isoformat()})
+            .eq("id", project_id)
+            .eq("owner_id", self._user_id)
+            .execute()
+        )
 
     def delete_project(self, project_id: str) -> bool:
         """Delete a project and everything on its canvas.

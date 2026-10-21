@@ -1,5 +1,6 @@
 "use client";
 
+import { Spinner } from "../Brand";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EnvironmentFileEntry, EnvironmentNode, EnvironmentPreviewEntry, ProjectNode, isAgentNode } from "@/lib/types";
 import {
@@ -441,7 +442,7 @@ export default function EnvPanel({
                           {p.live ? (
                             <span className="flex-none w-[6px] h-[6px] rounded-full bg-green anim-softpulse" />
                           ) : (
-                            <span className="flex-none w-[9px] h-[9px] rounded-full border border-white/25 border-t-accent animate-spin" />
+                            <Spinner size={9} />
                           )}
                           <span className="truncate min-w-0">{label(p)}</span>
                         </button>
@@ -570,7 +571,7 @@ export default function EnvPanel({
                   ) : null}
                   {(!src && !stalled) || (src && frameLoading) ? (
                     <div className="absolute inset-0 grid place-items-center bg-[#05080a]/80">
-                      <span className="w-5 h-5 rounded-full border-2 border-white/20 border-t-accent animate-spin" />
+                      <Spinner size={20} />
                     </div>
                   ) : null}
                 </div>

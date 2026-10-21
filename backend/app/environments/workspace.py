@@ -498,12 +498,7 @@ async def write_registry(sandbox: AsyncSandbox, entries: list[dict[str, Any]]) -
 
 
 async def upsert_preview(sandbox: AsyncSandbox, entry: dict[str, Any]) -> None:
-    """Add or replace the entry for entry['port']. Read-modify-write, not atomic.
-
-    # ponytail: two agents publishing at once can race and drop one write.
-    # Fine at today's scale (one coding agent per project); a file lock or a
-    # DB row would fix it if concurrent publishes become real.
-    """
+    """Add or replace the entry for entry['port']. Legacy file registry."""
     entries = await read_registry(sandbox)
     entries = [e for e in entries if e.get("port") != entry["port"]]
     entries.append(entry)

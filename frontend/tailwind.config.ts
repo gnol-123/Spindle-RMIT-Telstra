@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
@@ -30,7 +31,12 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Hover styles only on real pointers, so taps don't leave sticky hovers.
+    plugin(({ addVariant }) => {
+      addVariant("hoverable", "@media (hover: hover) and (pointer: fine) { &:hover }");
+    }),
+  ],
 };
 
 export default config;

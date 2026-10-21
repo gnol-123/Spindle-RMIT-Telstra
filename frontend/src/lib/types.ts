@@ -1,6 +1,7 @@
 export interface User {
   id: string;
   email: string;
+  name?: string | null;
 }
 
 export interface AuthTokens {
@@ -22,6 +23,8 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
+  // Signed app screenshot, else the canvas snapshot, else null.
+  preview_url?: string | null;
 }
 
 export type ToolPolicy = "ask" | "auto";

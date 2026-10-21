@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     environment_max_archive_bytes: int = 200_000_000
     # One file uploaded or saved from the code preview.
     environment_max_upload_bytes: int = 25_000_000
+    # Jev (TypeSafe AI) intent classifier for the new-project prompt. Empty key: always "name".
+    jev_api_key: str = ""
+    jev_api_base: str = "https://api.typesafe.ai"
+    jev_model: str = "jev-latest"
     # Model requests one turn may make. Bounds a tool loop that never converges.
     turn_request_limit: int = 100
     # Shutdown grace period to let detached turns (see workflows._DETACHED) finish.

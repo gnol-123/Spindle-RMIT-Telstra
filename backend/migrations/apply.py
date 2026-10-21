@@ -32,6 +32,8 @@ MIGRATIONS = [
     "pitch.sql",
     "runtime.sql",
     "design_skills.sql",
+    "previews.sql",
+    "canvas_snapshot.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
@@ -42,6 +44,7 @@ EXPECTED_TABLES = [
     "messages",
     "node_secrets",
     "nodes",
+    "previews",
     "projects",
     "tool_calls",
     "tool_presets",

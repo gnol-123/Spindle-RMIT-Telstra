@@ -33,7 +33,7 @@ from app.environments import e2b, lifecycle, workspace
 from app.environments.base import WORKSPACE_ROOT, EnvContext
 from app.repositories.environment_repo import EnvironmentRepository, EnvNode
 from app.routers.auth import get_current_user
-from app.routers.deps import EnvRepo
+from app.routers.deps import EnvRepo, PreviewRepo
 from app.services.supabase import get_user_client
 
 logger = logging.getLogger(__name__)
@@ -644,7 +644,7 @@ async def list_environment_ports(
 
 @router.get("/{node_id}/previews", response_model=PreviewsResponse)
 async def list_environment_previews(
-    project_id: UUID, node_id: UUID, env_repo: EnvRepo
+    project_id: UUID, node_id: UUID, env_repo: EnvRepo, preview_repo: PreviewRepo
 ) -> PreviewsResponse:
     """Published previews first (newest first), then any other listening port.
 
@@ -652,9 +652,22 @@ async def list_environment_previews(
     an agent named shows its title instead of just a bare port.
     """
     node = await _load_ready(project_id, node_id, env_repo)
+    stored = await to_thread.run_sync(preview_repo.list_for_env, str(node_id))
+    # Oldest to newest, as merge_previews expects.
+    db_registry = [
+        {
+            "title": r.title,
+            "port": r.port,
+            "path": r.path,
+            "agent_node_id": r.agent_node_id,
+            "created_at": r.created_at,
+        }
+        for r in reversed(stored)
+    ]
 
     async def scan(sandbox: AsyncSandbox) -> list[dict[str, Any]]:
-        registry = await workspace.read_registry(sandbox)
+        # Sandbox file is the pre-database registry, read only when the table is empty.
+        registry = db_registry or await workspace.read_registry(sandbox)
         # Live means answers HTTP, not just listening (ssh, rpcbind).
         listening = await workspace.web_ports(sandbox, await workspace.listening_ports(sandbox))
         return workspace.merge_previews(
@@ -673,10 +686,11 @@ async def list_environment_previews(
 
 @router.delete("/{node_id}/previews/{port}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_environment_preview(
-    project_id: UUID, node_id: UUID, port: int, env_repo: EnvRepo
+    project_id: UUID, node_id: UUID, port: int, env_repo: EnvRepo, preview_repo: PreviewRepo
 ) -> None:
     """Remove a published preview from the registry by port number."""
     node = await _load_ready(project_id, node_id, env_repo)
+    await to_thread.run_sync(preview_repo.delete, str(node_id), port)
 
     async def remove(sandbox: AsyncSandbox) -> None:
         entries = await workspace.read_registry(sandbox)

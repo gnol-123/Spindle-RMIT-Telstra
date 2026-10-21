@@ -8,6 +8,7 @@ from fastapi import Depends
 
 from app.config import settings
 from app.repositories.environment_repo import EnvironmentRepository
+from app.repositories.preview_repo import PreviewRepository
 from app.repositories.project_repo import ProjectRepository
 from app.repositories.tool_repo import ToolRepository
 from app.routers.auth import CurrentAuth
@@ -44,6 +45,14 @@ def get_environment_repository(auth: CurrentAuth) -> EnvironmentRepository:
 EnvRepo = Annotated[EnvironmentRepository, Depends(get_environment_repository)]
 
 
+def get_preview_repository(auth: CurrentAuth) -> PreviewRepository:
+    """Preview repository scoped to the caller, so RLS applies."""
+    return PreviewRepository(get_user_client(auth.token))
+
+
+PreviewRepo = Annotated[PreviewRepository, Depends(get_preview_repository)]
+
+
 @dataclass(frozen=True)
 class TurnRepositories:
     """The three repositories a turn runs on, bound to one verified user."""
@@ -52,6 +61,7 @@ class TurnRepositories:
     tool: ToolRepository
     env: EnvironmentRepository
     user_id: str
+    preview: PreviewRepository | None = None
 
 
 _warned_no_service_key = False
@@ -79,6 +89,7 @@ def get_turn_repositories(auth: CurrentAuth) -> TurnRepositories:
         tool=ToolRepository(client, uid),
         env=EnvironmentRepository(client, uid),
         user_id=uid,
+        preview=PreviewRepository(client),
     )
 
 

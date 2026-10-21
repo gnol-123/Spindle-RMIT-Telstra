@@ -19,6 +19,8 @@ creates, so run it second.
 | `pitch.sql` | Scrutinizer and evaluator agent types, pitch scrutiny skill preset. Run twelfth. |
 | `runtime.sql` | `messages.heartbeat_at` for the startup sweep, per agent type `request_limit`. Run thirteenth. |
 | `design_skills.sql` | Design Taste, Impeccable and Emil Design Engineering skill presets, wired onto UX/UI and Scrutinizer. Run fourteenth. |
+| `previews.sql` | `previews` table with RLS (agent-published previews, thumbnail path) and the private `project-previews` bucket. Run fifteenth. |
+| `canvas_snapshot.sql` | `projects.canvas_snapshot_at`, set when a canvas screenshot is uploaded. Run sixteenth. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying

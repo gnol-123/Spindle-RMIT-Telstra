@@ -1,5 +1,6 @@
 "use client";
 
+import { Spinner } from "./Brand";
 import { useEffect, useRef, useState } from "react";
 import { WORKSPACE_ROOT } from "@/lib/files";
 import { PORT_Y } from "./EdgeLayer";
@@ -287,7 +288,7 @@ export default function NodeCard({
           className="shrink-0 text-white/[0.28] hover:text-white/70 text-[13px] px-0.5 leading-none disabled:hover:text-white/[0.28]"
         >
           {deleting ? (
-            <span className="block w-[11px] h-[11px] rounded-full border border-white/25 border-t-white/70 animate-spin" />
+            <Spinner size={11} className="block" />
           ) : (
             "×"
           )}

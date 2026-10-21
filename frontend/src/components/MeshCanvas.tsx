@@ -30,8 +30,10 @@ import {
   createEdge,
   refreshEdge,
   deleteEdge,
+  uploadCanvasSnapshot,
   ApiError,
 } from "@/lib/api";
+import { toCanvas, getFontEmbedCSS } from "html-to-image";
 import Palette, { PaletteTab, PaletteTabs } from "./Palette";
 import NodeCard, { AttachedTool, AttachedEnvironment } from "./NodeCard";
 import EdgeLayer, { LinkDraft, LAYER_W, LAYER_H, portOf } from "./EdgeLayer";
@@ -39,9 +41,42 @@ import Inspector from "./Inspector";
 import ChatWindow, { ChatState, defaultChatState } from "./ChatWindow";
 import ToolConfigModal from "./ToolConfigModal";
 import WorkspaceWindow from "./workspace/WorkspaceWindow";
-import { BrandLockup, BrandMark } from "./Brand";
+import { BrandLockup, BrandMark, Spinner } from "./Brand";
 import RunProgress from "./RunProgress";
 import { tidyLayout } from "@/lib/layout";
+
+const SNAP_MAX_W = 1600;
+const SNAP_TIMEOUT_MS = 1500;
+
+// Snapshot filter: no iframes, xterm canvases or marked overlays.
+const keepNode = (n: HTMLElement) =>
+  !(n instanceof HTMLIFrameElement) &&
+  !(n instanceof HTMLCanvasElement && n.closest(".xterm")) &&
+  !n.dataset?.snapshotSkip;
+
+// What the viewport shows, as webp (jpeg if webp encoding is missing).
+// Renders the layer shifted by the scroll offset, since clones lose scroll.
+// No font CSS yet: skip fonts so Back stays fast.
+async function snapshotCanvas(viewport: HTMLElement, layer: HTMLElement, fontCss: string | null) {
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  const scale = Math.min(1, SNAP_MAX_W / w);
+  // toCanvas, not toBlob: html-to-image 1.11.11's toBlob ignores type and quality.
+  const canvas = await toCanvas(layer, {
+    width: w,
+    height: h,
+    canvasWidth: Math.round(w * scale),
+    canvasHeight: Math.round(h * scale),
+    pixelRatio: 1,
+    ...(fontCss !== null ? { fontEmbedCSS: fontCss } : { skipFonts: true }),
+    backgroundColor: "#0A0F24",
+    filter: keepNode,
+    style: { transform: `translate(${-viewport.scrollLeft}px, ${-viewport.scrollTop}px)` },
+  });
+  const encode = (type: string) => new Promise<Blob | null>((r) => canvas.toBlob(r, type, 0.82));
+  const webp = await encode("image/webp");
+  return webp?.type === "image/webp" ? webp : encode("image/jpeg");
+}
 
 // Defensive: if the backend ever returns the same row twice (e.g. a join
 // without DISTINCT), collapsing by id here keeps React's keys unique
@@ -54,9 +89,15 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
 
 export default function MeshCanvas({
   project,
+  focusNodeId,
+  initialPrompt,
   onBack,
 }: {
   project: Project;
+  // Agent to select and open the chat for on mount.
+  focusNodeId?: string;
+  // First message for the focused agent, sent by its chat once.
+  initialPrompt?: string;
   onBack: () => void;
 }) {
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([]);
@@ -70,7 +111,7 @@ export default function MeshCanvas({
   // beat — the "every node opens disconnected" bug. Gating the first paint
   // on all of it landing together fixes that at the source.
   const [initialLoading, setInitialLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(focusNodeId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [paletteTab, setPaletteTab] = useState<PaletteTab>("agents");
@@ -88,10 +129,16 @@ export default function MeshCanvas({
   // transcript is fetched once per node on first open (see ChatWindow).
   const [chatByNode, setChatByNode] = useState<Record<string, ChatState>>({});
   // Which agent's chat window is open, if any.
-  const [chatNodeId, setChatNodeId] = useState<string | null>(null);
+  const [chatNodeId, setChatNodeId] = useState<string | null>(focusNodeId ?? null);
+  // Keyed by node id; cleared on send so reopening the chat doesn't resend.
+  const initialPromptRef = useRef(focusNodeId && initialPrompt ? { nodeId: focusNodeId, text: initialPrompt } : null);
   // The code preview: which environment, and which folder to reveal.
   const [workspace, setWorkspace] = useState<{ envId: string; path: string | null } | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  // Set while Back is capturing, so a double click snapshots once.
+  const leavingRef = useRef(false);
+  // Embedded font CSS for snapshots, null until built.
+  const fontCssRef = useRef<string | null>(null);
   const pinchDist = useRef<number | null>(null);
   const pan = useRef<{ id: number; x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -250,6 +297,15 @@ export default function MeshCanvas({
     }, 2000);
     return () => clearInterval(interval);
   }, [project.id]);
+
+  // Font CSS for snapshots, built once the canvas is up.
+  useEffect(() => {
+    const layer = canvasRef.current?.firstElementChild as HTMLElement | null;
+    if (initialLoading || !layer || fontCssRef.current !== null) return;
+    getFontEmbedCSS(layer)
+      .then((css) => (fontCssRef.current = css))
+      .catch((e) => console.warn("Snapshot font CSS failed", e));
+  }, [initialLoading]);
 
   // Notices are informational — let them fade on their own. Errors stay
   // until dismissed so they can't be missed.
@@ -750,17 +806,38 @@ export default function MeshCanvas({
   }
   const openWorkspace = (envId: string, path?: string | null) => setWorkspace({ envId, path: path ?? null });
 
+  // Snapshot for the project card, then leave. Back waits 1.5 s at most.
+  async function handleBack() {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    const viewport = canvasRef.current;
+    const layer = viewport?.firstElementChild as HTMLElement | null;
+    let blob: Blob | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (viewport && layer && visibleNodes.length) {
+        blob = await Promise.race([
+          snapshotCanvas(viewport, layer, fontCssRef.current),
+          new Promise<null>((r) => (timer = setTimeout(() => r(null), SNAP_TIMEOUT_MS))),
+        ]).catch((e) => {
+          console.warn("Canvas snapshot failed", e);
+          return null;
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+      leavingRef.current = false;
+    }
+    onBack();
+    if (blob) uploadCanvasSnapshot(project.id, blob).catch((e) => console.warn("Canvas snapshot upload failed", e));
+  }
+
   // Nothing paints — not even an empty canvas — until nodes, edges and the
   // library lists have all landed together (see the mount effect above).
   if (initialLoading) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-bg text-text">
-        <div className="relative w-14 h-14 grid place-items-center">
-          <div className="opacity-90">
-            <BrandMark size={34} />
-          </div>
-          <div className="absolute inset-0 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
-        </div>
+        <Spinner size={36} label="Loading" />
         <div className="text-[13px] text-white/50">Loading {project.name}…</div>
       </div>
     );
@@ -771,15 +848,15 @@ export default function MeshCanvas({
       <header className="flex-none flex items-center gap-[22px] px-5 h-[60px] border-b border-white/[0.09] z-[5]">
         <div className="flex items-center gap-3 flex-none min-w-0">
           <button
-            onClick={onBack}
+            onClick={handleBack}
             title="Back to projects"
             className="w-7 h-7 rounded-lg border border-white/[0.12] text-white/50 hover:text-text hover:border-white/30 text-sm grid place-items-center"
           >
             ‹
           </button>
-          <BrandLockup />
+          <BrandMark />
           <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-[-0.01em]">Spindle</div>
+            <div className="text-sm font-semibold tracking-[-0.01em]">Spindel</div>
             <div className="text-[10.5px] text-white/[0.38] truncate max-w-[200px]" title={project.name}>
               {project.name}
             </div>
@@ -789,6 +866,7 @@ export default function MeshCanvas({
         <PaletteTabs tab={paletteTab} onTabChange={setPaletteTab} />
 
         <div className="ml-auto flex items-center gap-2.5">
+          <BrandLockup className="hidden lg:flex mr-1.5" />
           <div
             className="hidden lg:flex items-center gap-[7px] px-[11px] py-1.5 border border-white/10 rounded-lg text-[11.5px] text-white/50 whitespace-nowrap"
             title={`${equippedToolCount} equipped · ${toolNodeCount - equippedToolCount} unattached tool node(s)`}
@@ -1010,6 +1088,8 @@ export default function MeshCanvas({
           onRefreshEdge={handleRefreshEdge}
           onOpenWorkspace={openWorkspace}
           onNodeUpdated={handleNodeUpdated}
+          initialPrompt={initialPromptRef.current?.nodeId === chatNode.id ? initialPromptRef.current.text : undefined}
+          onInitialPromptSent={() => (initialPromptRef.current = null)}
         />
       )}
 

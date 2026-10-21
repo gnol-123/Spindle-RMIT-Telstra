@@ -42,6 +42,7 @@ class PasswordResetRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str | None = None
+    name: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -57,6 +58,15 @@ def _credentials_error(detail: str) -> HTTPException:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=detail,
         headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _to_user_response(user) -> UserResponse:
+    meta = getattr(user, "user_metadata", None) or {}
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        name=meta.get("full_name") or meta.get("name"),
     )
 
 
@@ -90,7 +100,7 @@ async def get_current_user(
     if response is None or response.user is None:
         raise _credentials_error("Invalid or expired token")
 
-    return UserResponse(id=str(response.user.id), email=response.user.email)
+    return _to_user_response(response.user)
 
 
 CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
@@ -164,7 +174,7 @@ def login(req: LoginRequest) -> TokenResponse:
         access_token=response.session.access_token,
         refresh_token=response.session.refresh_token,
         expires_in=response.session.expires_in,
-        user=UserResponse(id=str(response.user.id), email=response.user.email),
+        user=_to_user_response(response.user),
     )
 
 
@@ -183,7 +193,7 @@ def refresh(req: RefreshRequest) -> TokenResponse:
         access_token=response.session.access_token,
         refresh_token=response.session.refresh_token,
         expires_in=response.session.expires_in,
-        user=UserResponse(id=str(response.user.id), email=response.user.email),
+        user=_to_user_response(response.user),
     )
 
 

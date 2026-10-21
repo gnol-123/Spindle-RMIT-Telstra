@@ -75,7 +75,9 @@ async def prepare_turn(
             )
             if n is not None
         ]
-        envs = await assemble_environments(env_repo, env_nodes, agent_node_id=node.id)
+        envs = await assemble_environments(
+            env_repo, env_nodes, agent_node_id=node.id, preview_repo=repos.preview
+        )
         tools = merge_assembled(tools, envs)
 
     parts = [instructions, *tools.notes, unavailable_note(tools.unavailable)]
