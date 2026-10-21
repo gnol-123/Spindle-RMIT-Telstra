@@ -288,7 +288,7 @@ export default function WorkspaceSheet({
 
   return (
     // full covers the Inspector too; height stays, so snap offsets hold
-    <div className={`absolute inset-y-0 left-0 ${half ? "right-[300px]" : "right-0"} z-[30] overflow-hidden pointer-events-none`}>
+    <div className={`absolute inset-y-0 left-0 ${half ? "right-[var(--inspector-w)]" : "right-0"} z-[30] overflow-hidden pointer-events-none`}>
       <div
         ref={sheetRef}
         className="absolute inset-x-0 top-0 h-full flex flex-col pointer-events-auto bg-panel rounded-t-[16px] border-t border-white/[0.09] shadow-[0_-12px_32px_rgba(0,0,0,.45)] will-change-transform"

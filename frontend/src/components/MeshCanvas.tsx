@@ -142,6 +142,20 @@ export default function MeshCanvas({
   const pinchDist = useRef<number | null>(null);
   const pan = useRef<{ id: number; x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  // Read after mount to avoid a hydration mismatch.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("spindel.inspectorOpen") === "false") setInspectorOpen(false);
+    } catch {}
+  }, []);
+  const toggleInspector = () =>
+    setInspectorOpen((o) => {
+      try {
+        localStorage.setItem("spindel.inspectorOpen", String(!o));
+      } catch {}
+      return !o;
+    });
   const zoomRef = useRef(1);
   // In-flight create/delete calls. Non-zero means the server list is behind
   // the UI, so the poll merges status only and skips add/remove.
@@ -889,10 +903,13 @@ export default function MeshCanvas({
 
       <RunProgress agents={agentNodes} workingIds={workingAgentIds} edges={edges} />
 
-      <div className="flex-1 flex min-h-0 relative">
+      <div
+        className="flex-1 flex min-h-0 relative"
+        style={{ "--inspector-w": inspectorOpen ? "300px" : "36px" } as React.CSSProperties}
+      >
         {/* Toasts float over the canvas instead of pushing it down. */}
         {(notice || error) && (
-          <div className="absolute top-3 left-5 right-[320px] z-[35] flex flex-col items-center gap-2 pointer-events-none">
+          <div className="absolute top-3 left-5 right-[calc(var(--inspector-w)+20px)] transition-[right] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none z-[35] flex flex-col items-center gap-2 pointer-events-none">
             {error && (
               <div className="pointer-events-auto max-w-2xl flex items-start gap-3 px-3.5 py-2.5 rounded-[9px] border border-red-400/40 bg-[#1a0b0c]/95 backdrop-blur text-xs text-red-300 shadow-[0_14px_34px_rgba(0,0,0,.5)] anim-pop">
                 <span className="text-red-400">⚠</span>
@@ -914,14 +931,14 @@ export default function MeshCanvas({
           </div>
         )}
 
-        <div className="absolute left-0 right-[300px] bottom-[56px] z-[4] flex flex-wrap gap-[18px] px-5 py-2 bg-panel border-t border-white/[0.08] text-[10.5px] text-white/[0.34] pointer-events-none">
+        <div className="absolute left-0 right-[var(--inspector-w)] transition-[right] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none bottom-[56px] z-[4] flex flex-wrap gap-[18px] px-5 py-2 bg-panel border-t border-white/[0.08] text-[10.5px] text-white/[0.34] pointer-events-none">
           <span>Drag a card to move it</span>
           <span>Drag from ◗ port to port to share context</span>
           <span>Drop a tool onto a card to equip it</span>
           <span>Double-click an agent to chat</span>
         </div>
 
-        <div className="absolute right-[316px] bottom-[104px] z-[4] flex items-center border border-white/[0.13] rounded-md bg-panel/80 text-[11px] text-white/60">
+        <div className="absolute right-[calc(var(--inspector-w)+16px)] transition-[right] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none bottom-[104px] z-[4] flex items-center border border-white/[0.13] rounded-md bg-panel/80 text-[11px] text-white/60">
           <button onClick={() => zoomCenter(zoom / 1.2)} className="px-2 py-1 hover:text-white" title="Zoom out">−</button>
           <button onClick={() => zoomCenter(1)} className="px-1.5 py-1 w-12 hover:text-white" title="Reset zoom">{Math.round(zoom * 100)}%</button>
           <button onClick={() => zoomCenter(zoom * 1.2)} className="px-2 py-1 hover:text-white" title="Zoom in">+</button>
@@ -1043,6 +1060,8 @@ export default function MeshCanvas({
           onUnequipTool={handleUnequipTool}
           onNodeUpdated={handleNodeUpdated}
           onOpenWorkspace={openWorkspace}
+          open={inspectorOpen}
+          onToggle={toggleInspector}
         />
 
         <WorkspaceSheet

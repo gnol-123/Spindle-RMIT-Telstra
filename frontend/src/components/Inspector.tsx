@@ -42,7 +42,11 @@ export default function Inspector({
   onUnequipTool,
   onNodeUpdated,
   onOpenWorkspace,
+  open,
+  onToggle,
 }: {
+  open: boolean;
+  onToggle: () => void;
   projectId: string;
   node: ProjectNode | null;
   nodes: ProjectNode[];
@@ -71,7 +75,24 @@ export default function Inspector({
     : "Tool inspector";
 
   return (
-    <aside className="flex-none w-[300px] border-l border-white/[0.09] flex flex-col min-h-0 bg-panel">
+    <div
+      className="relative flex-none min-h-0 transition-[width] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none"
+      style={{ width: "var(--inspector-w)" }}
+    >
+      <button
+        onClick={onToggle}
+        aria-label={open ? "Hide inspector" : "Show inspector"}
+        aria-expanded={open}
+        className={`absolute top-3 z-10 w-6 h-6 grid place-items-center rounded-full border border-white/[0.13] bg-panel text-white/60 hoverable:hover:text-text hoverable:hover:border-white/30 active:scale-[0.97] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          open ? "-left-3" : "left-2"
+        }`}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d={open ? "M4.5 2.5 8 6l-3.5 3.5" : "M7.5 2.5 4 6l3.5 3.5"} />
+        </svg>
+      </button>
+      <aside className="w-full h-full border-l border-white/[0.09] flex flex-col min-h-0 overflow-hidden bg-panel">
+      {open && (<>
       <div className="flex-none px-[18px] pt-4 pb-3 border-b border-white/[0.09]">
         <div className="text-[12.5px] font-semibold">{title}</div>
         <div className="mt-1 text-[10.5px] text-white/[0.36] truncate">{node ? `Editing ${node.name}` : "Nothing selected"}</div>
@@ -121,7 +142,9 @@ export default function Inspector({
           onNodeUpdated={onNodeUpdated}
         />
       )}
-    </aside>
+      </>)}
+      </aside>
+    </div>
   );
 }
 

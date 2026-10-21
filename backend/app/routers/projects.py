@@ -104,6 +104,31 @@ async def list_projects(repo: ProjectRepo) -> list[ProjectResponse]:
     return [ProjectResponse.of(p, urls.get(paths.get(p.id, ""))) for p in projects]
 
 
+# Stripped first, so blank input is a 422.
+_Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class RenameProjectRequest(BaseModel):
+    name: _Name
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectResponse)
+async def rename_project(
+    project_id: UUID, req: RenameProjectRequest, repo: ProjectRepo
+) -> ProjectResponse:
+    """Rename a project. The card keeps its own preview_url."""
+    try:
+        project = await to_thread.run_sync(repo.rename_project, str(project_id), req.name)
+    except DuplicateProjectName as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"You already have a project named '{req.name}'",
+        ) from exc
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return ProjectResponse.of(project)
+
+
 _CANVAS_FILE = "canvas.webp"
 _SNAPSHOT_TYPES = {"image/webp", "image/png", "image/jpeg"}
 _SNAPSHOT_MAX = 2_000_000
