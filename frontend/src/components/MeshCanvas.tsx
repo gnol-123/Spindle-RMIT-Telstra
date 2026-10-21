@@ -857,7 +857,7 @@ export default function MeshCanvas({
           </button>
           <BrandMark />
           <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-[-0.01em]">Spindel</div>
+            <div className="text-sm font-semibold tracking-[-0.01em]">Spindle</div>
             <div className="text-[10.5px] text-white/[0.38] truncate max-w-[200px]" title={project.name}>
               {project.name}
             </div>

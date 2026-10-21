@@ -271,7 +271,7 @@ export default function ProjectsScreen({
         <div className="w-full max-w-[680px]">
           <p className="text-center text-[22px] sm:text-[26px] font-semibold tracking-[-0.01em]">Hello{name && ` ${name}`}!</p>
           <p className="text-center text-[22px] sm:text-[26px] font-semibold tracking-[-0.01em] leading-tight text-[rgba(245,237,226,0.55)] mt-0.5 mb-[34px]">
-            <span className="text-accent">Shall we</span> <span className="text-amber">Spindel</span>{" "}
+            <span className="text-accent">Shall we</span> <span className="text-amber">Spindle</span>{" "}
             <span className="text-accent">something?</span>
           </p>
           <label htmlFor="composer" className="block text-xs text-[rgba(245,237,226,0.75)] mb-2">

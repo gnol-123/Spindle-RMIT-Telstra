@@ -3,7 +3,7 @@ import SpindleAnim from "./SpindleAnim";
 // Spinning spindle logo; box is 1.6x wide.
 export function BrandMark({ size = 28 }: { size?: number }) {
   return (
-    <div role="img" aria-label="Spindel" className="flex-none" style={{ width: Math.round(size * 1.6), height: size }}>
+    <div role="img" aria-label="Spindle" className="flex-none" style={{ width: Math.round(size * 1.6), height: size }}>
       <SpindleAnim turns={1.5} step={2} square={0.7} />
     </div>
   );
@@ -38,7 +38,7 @@ export function Brand({ sub }: { sub?: string }) {
     <div className="flex items-center gap-3 min-w-0">
       <BrandMark />
       <div className="min-w-0">
-        <div className="text-sm font-semibold tracking-[-0.01em]">Spindel</div>
+        <div className="text-sm font-semibold tracking-[-0.01em]">Spindle</div>
         <div className="text-[10.5px] text-white/[0.38] truncate">{sub ?? "Telstra Muru-D Team 2"}</div>
       </div>
     </div>
