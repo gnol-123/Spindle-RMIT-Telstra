@@ -42,7 +42,7 @@ export default function CodeView({
   onSave: () => void;
   onCancelEdit: () => void;
   onDownload: () => void;
-  onPreview: () => void;
+  onPreview?: () => void;
   downloading: boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -113,7 +113,7 @@ export default function CodeView({
             </>
           ) : (
             <>
-              {isHtml(file.name) && (
+              {onPreview && isHtml(file.name) && (
                 <ToolbarBtn onClick={onPreview} title="Serve this file and show it in the preview">
                   ▶ Preview
                 </ToolbarBtn>

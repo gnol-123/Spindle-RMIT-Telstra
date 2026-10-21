@@ -36,68 +36,7 @@ function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace";
 }
 
-export default function WorkspaceWindow({
-  projectId,
-  envs,
-  initialEnvId,
-  initialPath,
-  nodes,
-  onNodeUpdated,
-  onClose,
-}: {
-  projectId: string;
-  // Every environment on the canvas; the header switches between them.
-  envs: EnvironmentNode[];
-  initialEnvId: string;
-  // Folder to reveal on open — an agent's working directory, usually.
-  initialPath?: string | null;
-  nodes: ProjectNode[];
-  onNodeUpdated: (node: ProjectNode) => void;
-  onClose: () => void;
-}) {
-  const [envId, setEnvId] = useState(initialEnvId);
-  const env = envs.find((e) => e.id === envId) ?? envs[0];
-
-  // Esc closes — unless focus is in the terminal (vim needs Esc) or an editor.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const el = document.activeElement as HTMLElement | null;
-      if (el?.closest(".terminal-host") || el?.tagName === "TEXTAREA") return;
-      onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  if (!env) return null;
-
-  return (
-    <div className="fixed inset-0 z-[70] bg-black/[0.72] backdrop-blur-[3px] p-4 lg:p-6 anim-fadein" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-label={`Workspace: ${env.name}`}
-        className="w-full h-full bg-modal border border-green/[0.28] rounded-2xl shadow-[0_40px_120px_rgba(0,0,0,.85),0_0_70px_rgba(126,231,135,.06)] flex flex-col overflow-hidden anim-pop"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Workspace
-          // A different environment is a different filesystem: start clean.
-          key={env.id}
-          projectId={projectId}
-          env={env}
-          envs={envs}
-          initialPath={env.id === initialEnvId ? initialPath ?? null : null}
-          nodes={nodes}
-          onSwitchEnv={setEnvId}
-          onNodeUpdated={onNodeUpdated}
-          onClose={onClose}
-        />
-      </div>
-    </div>
-  );
-}
-
-function Workspace({
+export function Workspace({
   projectId,
   env,
   envs,
@@ -106,6 +45,8 @@ function Workspace({
   onSwitchEnv,
   onNodeUpdated,
   onClose,
+  embedded = false,
+  terminal = false,
 }: {
   projectId: string;
   env: EnvironmentNode;
@@ -114,7 +55,10 @@ function Workspace({
   nodes: ProjectNode[];
   onSwitchEnv: (id: string) => void;
   onNodeUpdated: (node: ProjectNode) => void;
-  onClose: () => void;
+  onClose?: () => void;
+  // in the sheet: code only, terminal driven by `terminal`
+  embedded?: boolean;
+  terminal?: boolean;
 }) {
   const ready = env.status === "ready";
   const agentNames = useMemo(() => {
@@ -146,7 +90,8 @@ function Workspace({
   tabsRef.current = tabs;
 
   // -- preview state ------------------------------------------------------------
-  const [view, setView] = useState<View>("code");
+  const [viewState, setView] = useState<View>("code");
+  const view: View = embedded ? "code" : viewState;
   const [ports, setPorts] = useState<EnvironmentPort[]>([]);
   const [manualPorts, setManualPorts] = useState<EnvironmentPort[]>([]);
   const [portsLoaded, setPortsLoaded] = useState(false);
@@ -161,7 +106,11 @@ function Workspace({
 
   // -- chrome -----------------------------------------------------------------
   const [terminalOpened, setTerminalOpened] = useState(false);
-  const [terminalVisible, setTerminalVisible] = useState(false);
+  const [terminalState, setTerminalVisible] = useState(false);
+  const terminalVisible = embedded ? terminal : terminalState;
+  useEffect(() => {
+    if (terminalVisible) setTerminalOpened(true);
+  }, [terminalVisible]);
   const [live, setLive] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [banner, setBanner] = useState<{ kind: "error" | "ok"; text: string } | null>(null);
@@ -262,7 +211,7 @@ function Workspace({
   }, [projectId, env.id]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || embedded) return;
     refreshPorts().then((found) => {
       // Open straight into a side-by-side view when something is running.
       if (!choseViewOnce.current && found && found.length > 0) {
@@ -270,7 +219,7 @@ function Workspace({
         setView("split");
       }
     });
-  }, [ready, refreshPorts]);
+  }, [ready, embedded, refreshPorts]);
 
   // Keep a live port selected: the first preferred one, or none.
   useEffect(() => {
@@ -419,7 +368,7 @@ function Workspace({
         // Sandbox hiccup: keep what's on screen, try again next tick.
         return;
       }
-      refreshPorts();
+      if (!embedded) refreshPorts();
       setLastRefresh(Date.now());
 
       const moved = new Set<string>();
@@ -446,7 +395,7 @@ function Workspace({
         setReloadKey((k) => k + 1);
       }
     },
-    [projectId, env.id, refreshPorts, loadFile, autoReload]
+    [projectId, env.id, refreshPorts, loadFile, autoReload, embedded]
   );
 
   useEffect(() => {
@@ -601,7 +550,6 @@ function Workspace({
   }
 
   function toggleTerminal() {
-    if (!terminalOpened) setTerminalOpened(true);
     setTerminalVisible((v) => !v);
   }
 
@@ -639,11 +587,11 @@ function Workspace({
             <StatusPill status={env.status} />
           </div>
           <div className="text-[10.5px] text-white/40 mt-0.5 truncate">
-            Code preview · {env.runtime} sandbox · {env.role === "scratch" ? "shared by every agent" : "user environment"}
+            {embedded ? "" : "Code preview · "}{env.runtime} sandbox · {env.role === "scratch" ? "shared by every agent" : "user environment"}
           </div>
         </div>
 
-        {ready && (
+        {ready && !embedded && (
           <div className="ml-4 flex p-[3px] border border-white/10 rounded-[9px]" role="tablist" aria-label="View">
             {(["code", "split", "preview"] as View[]).map((v) => (
               <button
@@ -667,14 +615,16 @@ function Workspace({
         <div className="ml-auto flex items-center gap-2">
           {ready && (
             <>
-              <button
-                onClick={toggleTerminal}
-                className={`text-[11px] px-3 py-[7px] rounded-lg border transition-colors ${
-                  terminalVisible ? "border-accent/45 text-accent bg-accent/10" : "border-white/[0.14] text-white/60 hover:text-text hover:border-white/30"
-                }`}
-              >
-                ⌨ Terminal
-              </button>
+              {!embedded && (
+                <button
+                  onClick={toggleTerminal}
+                  className={`text-[11px] px-3 py-[7px] rounded-lg border transition-colors ${
+                    terminalVisible ? "border-accent/45 text-accent bg-accent/10" : "border-white/[0.14] text-white/60 hover:text-text hover:border-white/30"
+                  }`}
+                >
+                  ⌨ Terminal
+                </button>
+              )}
               <div className="relative flex">
                 <button
                   onClick={() => download({ path: WORKSPACE_ROOT, name: "workspace", type: "dir" })}
@@ -726,13 +676,15 @@ function Workspace({
               </div>
             </>
           )}
-          <button
-            onClick={onClose}
-            title="Close (Esc)"
-            className="w-[30px] h-[30px] rounded-[7px] border border-white/[0.14] text-white/[0.55] hover:text-text hover:border-white/30 text-sm"
-          >
-            ×
-          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close"
+              className="w-[30px] h-[30px] rounded-[7px] border border-white/[0.14] text-white/[0.55] hover:text-text hover:border-white/30 text-sm"
+            >
+              ×
+            </button>
+          )}
         </div>
       </div>
 
@@ -824,7 +776,7 @@ function Workspace({
                 onToggle={toggleDir}
                 onOpen={openFile}
                 onDownload={(e) => download(e)}
-                onPreview={(e) => serve(e.path)}
+                onPreview={embedded ? undefined : (e) => serve(e.path)}
               />
             </div>
             {dragOver && (
@@ -884,7 +836,7 @@ function Workspace({
                       onCancelEdit={() => setTabs((ts) => ts.map((t) => (t.path === activeTab.path ? { ...t, draft: null } : t)))}
                       onSave={() => save(activeTab.path)}
                       onDownload={() => download({ path: activeTab.path, name: activeTab.name, type: "file" })}
-                      onPreview={() => serve(activeTab.path)}
+                      onPreview={embedded ? undefined : () => serve(activeTab.path)}
                     />
                   ) : (
                     <EmptyEditor
@@ -931,9 +883,11 @@ function Workspace({
                   <span className="font-mono text-white/25 truncate">
                     {initialPath ? `~/workspace/${basename(initialPath).slice(0, 8)}` : "~/workspace"}
                   </span>
-                  <button onClick={() => setTerminalVisible(false)} className="ml-auto hover:text-text" aria-label="Hide terminal">
-                    ⌄
-                  </button>
+                  {!embedded && (
+                    <button onClick={() => setTerminalVisible(false)} className="ml-auto hover:text-text" aria-label="Hide terminal">
+                      ⌄
+                    </button>
+                  )}
                 </div>
                 <div className="flex-1 min-h-0">
                   <TerminalPane projectId={projectId} nodeId={env.id} cwdHint={initialPath} visible={terminalVisible} />

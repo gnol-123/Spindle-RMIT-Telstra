@@ -670,9 +670,13 @@ async def list_environment_previews(
         registry = db_registry or await workspace.read_registry(sandbox)
         # Live means answers HTTP, not just listening (ssh, rpcbind).
         listening = await workspace.web_ports(sandbox, await workspace.listening_ports(sandbox))
-        return workspace.merge_previews(
+        rows = workspace.merge_previews(
             registry, listening, lambda port: f"https://{sandbox.get_host(port)}"
         )
+        # Folder servers without index.html would show a directory listing.
+        folders = {d for p in listening if (d := workspace.folder_server_dir(p))}
+        html = await workspace.folder_html_files(sandbox, sorted(folders))
+        return workspace.fix_folder_paths(rows, listening, html)
 
     try:
         rows = await _on_sandbox(env_repo, node, scan)

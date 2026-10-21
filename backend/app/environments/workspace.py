@@ -513,6 +513,65 @@ def fallback_title(p: ListeningPort) -> str | None:
     return p.process or None
 
 
+def folder_server_dir(p: ListeningPort) -> str | None:
+    """The folder a python http.server lists: --directory, else its cwd."""
+    if "http.server" not in p.command.split():
+        return None
+    folder = serving_directory(p) or (posixpath.normpath(p.cwd) if p.cwd else None)
+    return folder if folder and folder.startswith("/") else None
+
+
+# Runs inside the sandbox: top-level *.html names per directory, as JSON.
+_HTML_LIST_SCRIPT = """
+import json, os, sys
+out = {}
+for d in sys.argv[1:]:
+    try:
+        out[d] = [n for n in os.listdir(d) if n.lower().endswith(".html")]
+    except OSError:
+        pass
+print(json.dumps(out))
+"""
+
+
+async def folder_html_files(sandbox: AsyncSandbox, directories: list[str]) -> dict[str, list[str]]:
+    """{directory: html filenames} in one command. Empty on any failure."""
+    if not directories:
+        return {}
+    cmd = " ".join(
+        ["python3", "-c", shlex.quote(_HTML_LIST_SCRIPT), *(shlex.quote(d) for d in directories)]
+    )
+    try:
+        r = await sandbox.commands.run(cmd, timeout=15, user="user")
+        data = json.loads(r.stdout.strip().splitlines()[-1])
+        return {str(d): [str(n) for n in names] for d, names in data.items()}
+    except Exception:
+        logger.info("html listing failed, previews left as is")
+        return {}
+
+
+def fix_folder_paths(
+    rows: list[dict[str, Any]],
+    listening: list[ListeningPort],
+    html_by_dir: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    """Point folder-server previews at an HTML file instead of Python's directory listing.
+
+    Only rows at "/" change. No HTML at all: unpublished rows drop, published stay.
+    """
+    folders = {p.port: d for p in listening if (d := folder_server_dir(p))}
+    out = []
+    for row in rows:
+        names = html_by_dir.get(folders.get(row["port"], ""))
+        if names is None or row["path"] != "/" or "index.html" in names:
+            out.append(row)
+        elif names:
+            out.append({**row, "path": "/" + min(names, key=lambda n: (n.lower(), n))})
+        elif row["published"]:
+            out.append(row)
+    return out
+
+
 def merge_previews(
     registry: list[dict[str, Any]],
     listening: list[ListeningPort],
