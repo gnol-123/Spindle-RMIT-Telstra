@@ -27,9 +27,7 @@ _INTENT = {
     "instructions": "Is this text only a project title, or a request to make something?",
     "criteria": {
         "name": "Only a short project title, no request to build or make anything",
-        "build": (
-            "Asks for something to be built, made or created, or describes an app idea"
-        ),
+        "build": "Asks for something to be built, made or created, or describes an app idea",
     },
 }
 

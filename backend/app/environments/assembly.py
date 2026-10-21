@@ -75,9 +75,7 @@ def _thumbnail_saver(preview_repo, project_id: str, node_id: str):
         row = await to_thread.run_sync(preview_repo.newest_for_env, node_id)
         if row is None:
             return
-        path = await to_thread.run_sync(
-            previews_storage.upload_thumbnail, project_id, row.id, data
-        )
+        path = await to_thread.run_sync(previews_storage.upload_thumbnail, project_id, row.id, data)
         await to_thread.run_sync(preview_repo.set_thumbnail, row.id, path)
 
     return save
