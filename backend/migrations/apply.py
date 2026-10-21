@@ -34,6 +34,7 @@ MIGRATIONS = [
     "design_skills.sql",
     "previews.sql",
     "canvas_snapshot.sql",
+    "realtime_edges.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 

@@ -6,11 +6,11 @@ import { AgentNode, Edge } from "@/lib/types";
 
 // A frontend-only progress strip for a mesh run. Nothing here comes from the
 // backend: it watches which agents are working (a chat turn in flight here,
-// or node.status === "running" from the poll) and counts them off as they
+// or node.status === "running" from the canvas sync) and counts them off as they
 // finish.
 //
 // A run starts when the first agent starts working and ends once nothing
-// has been working for GRACE_MS (the poll ticks every 2s, so an orchestrator
+// has been working for GRACE_MS (the canvas sync can lag, so an orchestrator
 // handing off between agents can briefly look idle). Its scope is every
 // agent that has worked during it plus everything downstream of those over
 // context links — the agents the work is expected to reach.

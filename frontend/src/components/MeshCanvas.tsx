@@ -31,8 +31,10 @@ import {
   refreshEdge,
   deleteEdge,
   uploadCanvasSnapshot,
+  authToken,
   ApiError,
 } from "@/lib/api";
+import { subscribeCanvas, changeMatters, coalesce, CANVAS_DEBOUNCE_MS } from "@/lib/realtime";
 import { toCanvas, getFontEmbedCSS } from "html-to-image";
 import Palette, { PaletteTab, PaletteTabs } from "./Palette";
 import NodeCard, { AttachedTool, AttachedEnvironment } from "./NodeCard";
@@ -171,6 +173,9 @@ export default function MeshCanvas({
   const [dragPos, setDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
   // Same fact as dragPos, as a ref the poll's closure can read live.
   const draggingRef = useRef(false);
+  // Node and edge ids on screen, for matching unfiltered realtime DELETEs.
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  knownIdsRef.current = new Set([...nodes.map((n) => n.id), ...edges.map((e) => e.id)]);
 
   async function reloadCanvas() {
     try {
@@ -232,8 +237,10 @@ export default function MeshCanvas({
 
   // Per the teammate's node-status addition: every node row (agent, tool,
   // environment) now carries status/status_detail (see NodeResponse in
-  // routers/projects.py). Poll nodes and edges every 2s so server-side
-  // creates (orchestrator provisioning) and deletes land on the canvas.
+  // routers/projects.py). Sync nodes and edges so server-side creates
+  // (orchestrator provisioning) and deletes land on the canvas. A realtime
+  // change on this project (debounced) or a (re)join triggers a sync; the
+  // payload is never applied. Fallback timer: 30s while live, 2s otherwise.
   // Merge rules: known nodes take status/status_detail/name only, never
   // position, which a drag owns locally until release. Unknown nodes are
   // added whole. Missing nodes are removed, but only from a non-empty
@@ -241,7 +248,21 @@ export default function MeshCanvas({
   // mid-create tick can't wipe the canvas. setState is skipped entirely
   // when nothing actually changed.
   useEffect(() => {
-    const interval = setInterval(() => {
+    let live = false;
+    let disposed = false;
+    // Set when a response was skipped or unsettled: retry on the 2s cadence.
+    let dirty = false;
+    // Started / last applied sync, so a slow older response can't undo a newer one.
+    let seq = 0;
+    let applied = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const markDirty = () => {
+      if (dirty) return;
+      dirty = true;
+      schedule();
+    };
+    const sync = () => {
+      const mine = ++seq;
       // Counted when the request goes out, compared when it comes back. A
       // response that overlapped a create or delete describes a canvas from
       // before it, so adding from it resurrects nodes the server just
@@ -251,9 +272,12 @@ export default function MeshCanvas({
       const startedInFlight = pendingMutations.current;
       Promise.all([listNodes(project.id), listEdges(project.id)])
         .then(([fresh, freshEdges]) => {
+          if (disposed) return;
           // A drag is a gesture in progress: adding or removing cards under
           // the cursor stutters it, so leave the canvas alone until release.
-          if (draggingRef.current) return;
+          if (draggingRef.current) return markDirty();
+          if (mine < applied) return;
+          applied = mine;
           const settled =
             pendingMutations.current === 0 &&
             startedInFlight === 0 &&
@@ -298,7 +322,8 @@ export default function MeshCanvas({
           // Only while settled: nodes and edges are two separate requests, so
           // an unsettled tick can pair stale nodes with fresh edges and flash
           // an equipped tool as a floating box.
-          if (!settled) return;
+          if (!settled) return markDirty();
+          dirty = false;
           setEdges((prev) => {
             const next = dedupeById(freshEdges);
             if (prev.length === next.length && prev.every((e, i) => e.id === next[i].id)) return prev;
@@ -306,10 +331,40 @@ export default function MeshCanvas({
           });
         })
         .catch(() => {
-          // Best-effort: a failed poll just tries again on the next tick.
+          // Failed sync: retry on the fast timer.
+          if (!disposed) markDirty();
         });
-    }, 2000);
-    return () => clearInterval(interval);
+    };
+
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        sync();
+        schedule();
+      }, live && !dirty ? 30_000 : 2_000);
+    };
+    schedule();
+    const kick = coalesce(sync, CANVAS_DEBOUNCE_MS);
+    const stop = subscribeCanvas(
+      project.id,
+      () => authToken().catch(() => null),
+      (c) => {
+        if (changeMatters(c, project.id, knownIdsRef.current)) kick.call();
+      },
+      (l) => {
+        // Join or rejoin: catch up on anything missed.
+        if (l) kick.call();
+        if (l === live) return;
+        live = l;
+        schedule();
+      },
+    );
+    return () => {
+      disposed = true;
+      stop();
+      kick.cancel();
+      clearTimeout(timer);
+    };
   }, [project.id]);
 
   // Font CSS for snapshots, built once the canvas is up.
