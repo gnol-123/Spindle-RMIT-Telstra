@@ -40,7 +40,7 @@ import EdgeLayer, { LinkDraft, LAYER_W, LAYER_H, portOf } from "./EdgeLayer";
 import Inspector from "./Inspector";
 import ChatWindow, { ChatState, defaultChatState } from "./ChatWindow";
 import ToolConfigModal from "./ToolConfigModal";
-import WorkspaceWindow from "./workspace/WorkspaceWindow";
+import WorkspaceSheet, { SheetOpenRequest } from "./workspace/WorkspaceSheet";
 import { BrandLockup, BrandMark, Spinner } from "./Brand";
 import RunProgress from "./RunProgress";
 import { tidyLayout } from "@/lib/layout";
@@ -132,8 +132,8 @@ export default function MeshCanvas({
   const [chatNodeId, setChatNodeId] = useState<string | null>(focusNodeId ?? null);
   // Keyed by node id; cleared on send so reopening the chat doesn't resend.
   const initialPromptRef = useRef(focusNodeId && initialPrompt ? { nodeId: focusNodeId, text: initialPrompt } : null);
-  // The code preview: which environment, and which folder to reveal.
-  const [workspace, setWorkspace] = useState<{ envId: string; path: string | null } | null>(null);
+  // Last workspace open request; n makes repeats distinct.
+  const [sheetOpen, setSheetOpen] = useState<SheetOpenRequest | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   // Set while Back is capturing, so a double click snapshots once.
   const leavingRef = useRef(false);
@@ -582,7 +582,6 @@ export default function MeshCanvas({
       setEdges((prev) => prev.filter((e) => !gone.has(e.source_node_id) && !gone.has(e.target_node_id)));
       setSelectedId((sel) => (sel && gone.has(sel) ? null : sel));
       setChatNodeId((c) => (c && gone.has(c) ? null : c));
-      setWorkspace((w) => (w && gone.has(w.envId) ? null : w));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not delete node");
     } finally {
@@ -791,20 +790,8 @@ export default function MeshCanvas({
     setChatNodeId(id);
   };
 
-  const envNodes = nodes.filter(isEnvironmentNode);
-  // The environment the header's Workspace button opens: the selected one,
-  // else the first one the selected agent uses, else a user environment,
-  // else the shared scratch space every agent writes to.
-  function defaultWorkspace(): { envId: string; path: string | null } | null {
-    if (selectedNode && isEnvironmentNode(selectedNode)) return { envId: selectedNode.id, path: null };
-    if (selectedNode && isAgentNode(selectedNode)) {
-      const e = edges.find((x) => x.kind === "environment" && x.target_node_id === selectedNode.id);
-      if (e) return { envId: e.source_node_id, path: `/home/user/workspace/${selectedNode.id}` };
-    }
-    const env = envNodes.find((n) => n.role !== "scratch") ?? envNodes[0];
-    return env ? { envId: env.id, path: null } : null;
-  }
-  const openWorkspace = (envId: string, path?: string | null) => setWorkspace({ envId, path: path ?? null });
+  const openWorkspace = (envId: string, path?: string | null) =>
+    setSheetOpen({ envId, path: path ?? null, n: Date.now() });
 
   // Snapshot for the project card, then leave. Back waits 1.5 s at most.
   async function handleBack() {
@@ -877,21 +864,6 @@ export default function MeshCanvas({
             {environmentNodeCount} env{environmentNodeCount === 1 ? "" : "s"}
           </div>
           <button
-            onClick={() => {
-              const w = defaultWorkspace();
-              if (w) setWorkspace(w);
-            }}
-            disabled={envNodes.length === 0}
-            title={
-              envNodes.length === 0
-                ? "No environment yet — add an agent or an environment first"
-                : "Browse what agents have built, download it, and preview it running"
-            }
-            className="border border-green/35 text-green hover:bg-green/10 rounded-lg px-3 py-2 text-xs transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            ▣ Workspace
-          </button>
-          <button
             onClick={handleTidy}
             className="bg-transparent border border-white/[0.14] text-white/60 hover:text-text hover:border-white/30 rounded-lg px-3 py-2 text-xs transition-colors"
           >
@@ -920,7 +892,7 @@ export default function MeshCanvas({
       <div className="flex-1 flex min-h-0 relative">
         {/* Toasts float over the canvas instead of pushing it down. */}
         {(notice || error) && (
-          <div className="absolute top-3 left-5 right-[320px] z-20 flex flex-col items-center gap-2 pointer-events-none">
+          <div className="absolute top-3 left-5 right-[320px] z-[35] flex flex-col items-center gap-2 pointer-events-none">
             {error && (
               <div className="pointer-events-auto max-w-2xl flex items-start gap-3 px-3.5 py-2.5 rounded-[9px] border border-red-400/40 bg-[#1a0b0c]/95 backdrop-blur text-xs text-red-300 shadow-[0_14px_34px_rgba(0,0,0,.5)] anim-pop">
                 <span className="text-red-400">⚠</span>
@@ -942,14 +914,14 @@ export default function MeshCanvas({
           </div>
         )}
 
-        <div className="absolute left-0 right-[300px] bottom-0 z-[4] flex flex-wrap gap-[18px] px-5 py-2 bg-panel border-t border-white/[0.08] text-[10.5px] text-white/[0.34] pointer-events-none">
+        <div className="absolute left-0 right-[300px] bottom-[56px] z-[4] flex flex-wrap gap-[18px] px-5 py-2 bg-panel border-t border-white/[0.08] text-[10.5px] text-white/[0.34] pointer-events-none">
           <span>Drag a card to move it</span>
           <span>Drag from ◗ port to port to share context</span>
           <span>Drop a tool onto a card to equip it</span>
           <span>Double-click an agent to chat</span>
         </div>
 
-        <div className="absolute right-[316px] bottom-12 z-[4] flex items-center border border-white/[0.13] rounded-md bg-panel/80 text-[11px] text-white/60">
+        <div className="absolute right-[316px] bottom-[104px] z-[4] flex items-center border border-white/[0.13] rounded-md bg-panel/80 text-[11px] text-white/60">
           <button onClick={() => zoomCenter(zoom / 1.2)} className="px-2 py-1 hover:text-white" title="Zoom out">−</button>
           <button onClick={() => zoomCenter(1)} className="px-1.5 py-1 w-12 hover:text-white" title="Reset zoom">{Math.round(zoom * 100)}%</button>
           <button onClick={() => zoomCenter(zoom * 1.2)} className="px-2 py-1 hover:text-white" title="Zoom in">+</button>
@@ -1072,6 +1044,15 @@ export default function MeshCanvas({
           onNodeUpdated={handleNodeUpdated}
           onOpenWorkspace={openWorkspace}
         />
+
+        <WorkspaceSheet
+          projectId={project.id}
+          nodes={nodes}
+          edges={edges}
+          workingIds={workingAgentIds}
+          openRequest={sheetOpen}
+          onNodeUpdated={handleNodeUpdated}
+        />
       </div>
 
       {chatNode && isAgentNode(chatNode) && (
@@ -1086,22 +1067,13 @@ export default function MeshCanvas({
           onClose={() => setChatNodeId(null)}
           onAfterTurn={reloadCanvas}
           onRefreshEdge={handleRefreshEdge}
-          onOpenWorkspace={openWorkspace}
+          onOpenWorkspace={(envId, path) => {
+            setChatNodeId(null);
+            openWorkspace(envId, path);
+          }}
           onNodeUpdated={handleNodeUpdated}
           initialPrompt={initialPromptRef.current?.nodeId === chatNode.id ? initialPromptRef.current.text : undefined}
           onInitialPromptSent={() => (initialPromptRef.current = null)}
-        />
-      )}
-
-      {workspace && envNodes.some((n) => n.id === workspace.envId) && (
-        <WorkspaceWindow
-          projectId={project.id}
-          envs={envNodes}
-          initialEnvId={workspace.envId}
-          initialPath={workspace.path}
-          nodes={nodes}
-          onNodeUpdated={handleNodeUpdated}
-          onClose={() => setWorkspace(null)}
         />
       )}
 

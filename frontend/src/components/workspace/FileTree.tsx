@@ -53,7 +53,7 @@ export default function FileTree({
   onToggle: (dir: string) => void;
   onOpen: (entry: EnvironmentFileEntry) => void;
   onDownload: (entry: EnvironmentFileEntry) => void;
-  onPreview: (entry: EnvironmentFileEntry) => void;
+  onPreview?: (entry: EnvironmentFileEntry) => void;
 }) {
   const visible = (e: EnvironmentFileEntry) => showHidden || !e.name.startsWith(".");
 
@@ -168,7 +168,7 @@ function Row({
   onToggle: (dir: string) => void;
   onOpen: (entry: EnvironmentFileEntry) => void;
   onDownload: (entry: EnvironmentFileEntry) => void;
-  onPreview: (entry: EnvironmentFileEntry) => void;
+  onPreview?: (entry: EnvironmentFileEntry) => void;
 }) {
   const isDir = entry.type === "dir";
   const noise = isDir && isNoise(entry.name);
@@ -219,7 +219,7 @@ function Row({
           <Spinner size={11} />
         ) : (
           <span className="hidden group-hover:flex items-center gap-0.5">
-            {previewable && (
+            {previewable && onPreview && (
               <IconBtn
                 label={isDir ? "Serve this folder in the preview" : "Open in the preview"}
                 onClick={() => onPreview(entry)}
