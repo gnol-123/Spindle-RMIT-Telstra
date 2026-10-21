@@ -8,7 +8,7 @@ from uuid import UUID
 
 import anyio
 from anyio import to_thread
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -89,8 +89,61 @@ async def create_project(
 async def list_projects(repo: ProjectRepo) -> list[ProjectResponse]:
     projects = await to_thread.run_sync(repo.list_projects)
     thumbs = await to_thread.run_sync(repo.latest_thumbnails, [p.id for p in projects])
-    urls = await to_thread.run_sync(previews_storage.sign, list(thumbs.values())) if thumbs else {}
-    return [ProjectResponse.of(p, urls.get(thumbs.get(p.id, ""))) for p in projects]
+    # App screenshot first, then the canvas snapshot.
+    paths = {
+        p.id: thumbs.get(p.id) or f"{p.id}/{_CANVAS_FILE}"
+        for p in projects
+        if p.id in thumbs or p.canvas_snapshot_at
+    }
+    urls: dict[str, str] = {}
+    if paths:
+        try:
+            urls = await to_thread.run_sync(previews_storage.sign, list(paths.values()))
+        except Exception:
+            log.warning("preview signing failed; listing without previews", exc_info=True)
+    return [ProjectResponse.of(p, urls.get(paths.get(p.id, ""))) for p in projects]
+
+
+_CANVAS_FILE = "canvas.webp"
+_SNAPSHOT_TYPES = {"image/webp", "image/png", "image/jpeg"}
+_SNAPSHOT_MAX = 2_000_000
+
+
+@router.put("/projects/{project_id}/canvas-snapshot", status_code=status.HTTP_204_NO_CONTENT)
+async def put_canvas_snapshot(project_id: UUID, request: Request, repo: ProjectRepo) -> None:
+    """Store a canvas screenshot as the project's card preview. Raw image body."""
+    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in _SNAPSHOT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Send image/webp, image/png or image/jpeg",
+        )
+    too_big = HTTPException(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Snapshot is over 2 MB"
+    )
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > _SNAPSHOT_MAX:
+        raise too_big
+    data = await request.body()
+    if len(data) > _SNAPSHOT_MAX:
+        raise too_big
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty body")
+
+    try:
+        await to_thread.run_sync(
+            previews_storage.upload_canvas_snapshot, str(project_id), data, content_type
+        )
+    except Exception as exc:
+        log.exception("canvas snapshot upload failed for project %s", project_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Snapshot storage failed"
+        ) from exc
+    await to_thread.run_sync(repo.set_canvas_snapshot_at, str(project_id))
 
 
 # Stripped first, so blank input is a 422.

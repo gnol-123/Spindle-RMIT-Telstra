@@ -1,6 +1,7 @@
 """New-project prompt: is it a title or an app idea, and what to call the idea."""
 
 import logging
+import re
 import string
 from functools import lru_cache
 from typing import Literal
@@ -17,7 +18,10 @@ log = logging.getLogger(__name__)
 _transport: httpx.AsyncBaseTransport | None = None
 
 _MIN_CONFIDENCE = 0.6
-_TITLE_PROMPT = "Name this app idea in at most 4 words, title case, no punctuation."
+_TITLE_PROMPT = (
+    "Name this app idea in at most 4 words, title case, no punctuation. "
+    "Reply with the name only: no code, markdown, quotes or explanation."
+)
 _INTENT = {
     "type": "choice",
     "instructions": "Is this text only a project title, or a request to make something?",
@@ -57,11 +61,21 @@ def _title_agent() -> Agent[None, str]:
     return Agent(_model(settings.summary_model), output_type=str, system_prompt=_TITLE_PROMPT)
 
 
+def _clean_title(raw: str) -> str:
+    """First line, no markdown, labels or code, at most 4 words. Empty when unusable."""
+    line = next((ln for ln in raw.splitlines() if ln.strip()), "")
+    if line.lstrip().startswith(("```", "<")):
+        return ""
+    line = re.sub(r"^\W*(title|name)\W*:", "", line.strip(), flags=re.I)
+    words = re.sub(r"[^\w\s&'-]", " ", line).split()
+    return " ".join(words[:4])[:60].strip()
+
+
 async def title_for(idea: str) -> str:
     """Short project name for an idea. Falls back to its first 5 words, never empty."""
     try:
         result = await _title_agent().run(idea)
-        title = result.output.strip()[:60].strip()
+        title = _clean_title(result.output)
         if title:
             return title
     except Exception:
