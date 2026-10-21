@@ -3,14 +3,14 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import anyio
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, status
 from postgrest.exceptions import APIError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.environments import lifecycle
 from app.repositories.project_repo import (
@@ -29,9 +29,11 @@ from app.repositories.tool_repo import (
     ToolType,
     load_node_secrets,
 )
+from app.routers.auth import CurrentAuth
 from app.routers.chat import ChatMessage
 from app.routers.deps import EnvRepo, ProjectRepo, ToolRepo, TurnRepos
 from app.routers.environments import EnvironmentNodeResponse, create_environment_node
+from app.services import intake, previews_storage
 from app.services.models import ModelsUnavailable, list_models
 from app.tools.base import ToolContext
 from app.tools.oauth_refresh import TokenExchangeError, with_access_token
@@ -59,10 +61,11 @@ class CreateProjectRequest(BaseModel):
 class ProjectResponse(BaseModel):
     id: UUID
     name: str
+    preview_url: str | None = None
 
     @classmethod
-    def of(cls, p: Project) -> "ProjectResponse":
-        return cls(id=UUID(p.id), name=p.name)
+    def of(cls, p: Project, preview_url: str | None = None) -> "ProjectResponse":
+        return cls(id=UUID(p.id), name=p.name, preview_url=preview_url)
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -85,7 +88,84 @@ async def create_project(
 @router.get("/projects", response_model=list[ProjectResponse])
 async def list_projects(repo: ProjectRepo) -> list[ProjectResponse]:
     projects = await to_thread.run_sync(repo.list_projects)
-    return [ProjectResponse.of(p) for p in projects]
+    thumbs = await to_thread.run_sync(repo.latest_thumbnails, [p.id for p in projects])
+    urls = await to_thread.run_sync(previews_storage.sign, list(thumbs.values())) if thumbs else {}
+    return [ProjectResponse.of(p, urls.get(thumbs.get(p.id, ""))) for p in projects]
+
+
+# Stripped first, so blank input is a 422.
+_Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+class ClassifyRequest(BaseModel):
+    text: _Prompt
+
+
+class ClassifyResponse(BaseModel):
+    kind: Literal["name", "build"]
+
+
+@router.post("/projects/classify", response_model=ClassifyResponse)
+async def classify_prompt(req: ClassifyRequest, _auth: CurrentAuth) -> ClassifyResponse:
+    """Is the new-project prompt a title or an app idea."""
+    return ClassifyResponse(kind=await intake.classify(req.text))
+
+
+class BuildProjectRequest(BaseModel):
+    idea: _Prompt
+
+
+class BuildProjectResponse(BaseModel):
+    project: ProjectResponse
+    orchestrator_node_id: UUID
+
+
+@router.post(
+    "/projects/build", response_model=BuildProjectResponse, status_code=status.HTTP_201_CREATED
+)
+async def build_project(
+    req: BuildProjectRequest, repo: ProjectRepo, tool_repo: ToolRepo, env_repo: EnvRepo
+) -> BuildProjectResponse:
+    """Name a project after the idea and seed it with an orchestrator."""
+    agent_type = await to_thread.run_sync(repo.get_agent_type, "orchestrator")
+    if agent_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Orchestrator agent type is missing from the catalog",
+        )
+
+    name = await intake.title_for(req.idea)
+    try:
+        project = await to_thread.run_sync(lambda: repo.create_project(name))
+    except DuplicateProjectName:
+        try:
+            project = await to_thread.run_sync(lambda: repo.create_project(f"{name} 2"))
+        except DuplicateProjectName as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"You already have a project named '{name}'",
+            ) from exc
+
+    # provision_agent ensures the scratch node. An empty project left behind
+    # would push retries to "Name 2", so undo it on failure.
+    try:
+        node_id = await provision_agent(
+            project.id,
+            agent_type,
+            agent_type.name,
+            position_x=0,
+            position_y=0,
+            tool_policy="auto",
+            repo=repo,
+            tool_repo=tool_repo,
+            env_repo=env_repo,
+        )
+    except Exception:
+        await to_thread.run_sync(repo.delete_project, project.id)
+        raise
+    return BuildProjectResponse(
+        project=ProjectResponse.of(project), orchestrator_node_id=UUID(node_id)
+    )
 
 
 async def _wrong_kind_detail(node_id: UUID, tool_repo: ToolRepo, env_repo: EnvRepo) -> str:
@@ -122,6 +202,12 @@ async def delete_project(project_id: UUID, repo: ProjectRepo, env_repo: EnvRepo)
     deleted = await to_thread.run_sync(repo.delete_project, str(project_id))
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    # Thumbnails outlive the row cascade: best effort.
+    try:
+        await to_thread.run_sync(previews_storage.remove_project, str(project_id))
+    except Exception:
+        log.exception("preview storage cleanup failed for project %s", project_id)
 
 
 # -- AGENT NODES ---------------------------------------------------------------

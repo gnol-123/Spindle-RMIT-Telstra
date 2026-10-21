@@ -32,6 +32,7 @@ MIGRATIONS = [
     "pitch.sql",
     "runtime.sql",
     "design_skills.sql",
+    "previews.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
