@@ -23,7 +23,7 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
-  // Signed screenshot URL, null until the coding agent takes one.
+  // Signed app screenshot, else the canvas snapshot, else null.
   preview_url?: string | null;
 }
 

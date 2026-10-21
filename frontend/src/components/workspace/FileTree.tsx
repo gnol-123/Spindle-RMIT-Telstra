@@ -1,5 +1,6 @@
 "use client";
 
+import { Spinner } from "../Brand";
 import { EnvironmentFileEntry } from "@/lib/types";
 import { fileGlyph, formatBytes, isHtml, isNoise, timeAgo } from "@/lib/files";
 
@@ -215,7 +216,7 @@ function Row({
           <span className="text-[10px] text-white/25 tabular-nums group-hover:hidden">{formatBytes(entry.size)}</span>
         )}
         {busy ? (
-          <span className="w-[11px] h-[11px] rounded-full border border-white/25 border-t-accent animate-spin" />
+          <Spinner size={11} />
         ) : (
           <span className="hidden group-hover:flex items-center gap-0.5">
             {previewable && (

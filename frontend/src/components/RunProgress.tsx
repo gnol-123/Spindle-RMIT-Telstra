@@ -1,5 +1,6 @@
 "use client";
 
+import { Spinner } from "./Brand";
 import { useEffect, useReducer, useRef } from "react";
 import { AgentNode, Edge } from "@/lib/types";
 
@@ -139,7 +140,7 @@ export default function RunProgress({
       {finishedRun ? (
         <span className="w-4 h-4 grid place-items-center rounded-full bg-green/15 text-green text-[10px] leading-none">✓</span>
       ) : (
-        <span className="w-3.5 h-3.5 rounded-full border-2 border-accent/25 border-t-accent animate-spin" />
+        <Spinner size={14} />
       )}
       <span
         className={`text-[12.5px] font-semibold whitespace-nowrap max-w-[320px] truncate ${

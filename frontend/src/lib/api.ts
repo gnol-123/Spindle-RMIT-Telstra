@@ -237,6 +237,15 @@ export async function deleteProject(projectId: string) {
   return request<void>(`/projects/${projectId}`, { method: "DELETE", auth: true });
 }
 
+// Card preview of the canvas, raw image bytes.
+export async function uploadCanvasSnapshot(projectId: string, blob: Blob): Promise<void> {
+  await authedFetch(`/projects/${projectId}/canvas-snapshot`, {
+    method: "PUT",
+    headers: { "Content-Type": blob.type },
+    body: blob,
+  });
+}
+
 // Nodes — agents, tools and environments are mixed together on a
 // project's canvas, distinguished by `kind`.
 

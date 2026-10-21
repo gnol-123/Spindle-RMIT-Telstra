@@ -3,7 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Spindle | Telstra Muru-D Team 2",
+  title: "Spindel | Telstra Muru-D Team 2",
   description: "Canvas of agent and tool nodes for the idea-to-prototype pipeline",
 };
 
@@ -16,8 +16,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+        {/* crossOrigin: lets the canvas snapshot read and embed these fonts. */}
         <link
           rel="stylesheet"
+          crossOrigin="anonymous"
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Poppins:wght@300;400;500;600;700&display=swap"
         />
       </head>

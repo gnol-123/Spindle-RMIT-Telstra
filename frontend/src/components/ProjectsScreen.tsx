@@ -12,7 +12,7 @@ import {
   ApiError,
 } from "@/lib/api";
 import { Project, User } from "@/lib/types";
-import { Brand } from "./Brand";
+import { Brand, BrandLockup } from "./Brand";
 import SpindleAnim from "./SpindleAnim";
 
 const SAMPLES = ["Finance tracker", "Build me a finance tracker", "Recipe box", "Make a habit app with streaks"];
@@ -28,6 +28,14 @@ function Arrow() {
   return (
     <svg viewBox="0 0 256 256" fill="none" stroke="currentColor" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true">
       <path d="M40 128h176M144 56l72 72-72 72" />
+    </svg>
+  );
+}
+
+function Down() {
+  return (
+    <svg viewBox="0 0 256 256" fill="none" stroke="currentColor" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3" aria-hidden="true">
+      <path d="M128 40v176M56 144l72 72 72-72" />
     </svg>
   );
 }
@@ -55,6 +63,8 @@ export default function ProjectsScreen({
   const ctrl = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const gridRef = useRef<HTMLElement | null>(null);
+  const [gridInView, setGridInView] = useState(false);
 
   useEffect(() => {
     listProjects()
@@ -178,38 +188,126 @@ export default function ProjectsScreen({
     }
   }
 
+  // Pill shows only while the projects section is off screen.
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setGridInView(e.isIntersecting), { threshold: 0, rootMargin: "0px 0px -64px 0px" }); // in view once ~64px of the grid shows
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  function jumpToProjects() {
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    gridRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }
+
   const name = firstName(user);
+  const showJump = !gridInView && projects !== null && projects.length > 0;
 
   return (
-    <div className="h-screen flex flex-col bg-bg text-text">
-      <header className="flex-none flex items-center gap-4 px-5 h-[60px] border-b border-white/[0.09]">
+    <div className="min-h-screen bg-bg text-text">
+      <header className="flex items-center gap-4 px-5 h-[60px] border-b border-white/[0.09]">
         <Brand />
+        <BrandLockup className="ml-auto hidden sm:flex" />
         <button
           onClick={async () => {
             await logout();
             onLoggedOut();
           }}
-          className={`ml-auto shrink-0 whitespace-nowrap bg-transparent border border-white/[0.14] text-white/60 hover:text-text hover:border-white/30 rounded-lg px-3 py-2 text-xs ${RING}`}
+          className={`ml-auto sm:ml-0 shrink-0 whitespace-nowrap bg-transparent border border-white/[0.14] text-white/60 hover:text-text hover:border-white/30 rounded-lg px-3 py-2 text-xs ${RING}`}
         >
           Log out
         </button>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-auto lg:overflow-hidden grid lg:grid-cols-[minmax(0,1fr)_340px]">
-        <main
-          className="order-2 lg:order-1 lg:min-h-0 lg:overflow-auto px-5 sm:px-7 py-8"
-          style={{
-            backgroundImage: "radial-gradient(rgba(255,255,255,.06) 1px, transparent 1px)",
-            backgroundSize: "26px 26px",
-          }}
-        >
+      <section className="relative isolate overflow-hidden min-h-[calc(100dvh-60px)] flex items-center justify-center px-5 py-12">
+        <div className="w-full max-w-[680px]">
+          <p className="text-center text-[22px] sm:text-[26px] font-semibold tracking-[-0.01em]">Hello{name && ` ${name}`}!</p>
+          <p className="text-center text-[22px] sm:text-[26px] font-semibold tracking-[-0.01em] leading-tight text-[rgba(245,237,226,0.55)] mt-0.5 mb-[34px]">
+            Shall we <span className="text-amber">Spindel</span> something?
+          </p>
+          <label htmlFor="composer" className="block text-xs text-[rgba(245,237,226,0.75)] mb-2">
+            Give us your idea or name your project
+          </label>
+          <div className="relative">
+            {/* Spindle behind the composer, full hero width */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -z-10 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-screen h-[180px] sm:h-[260px] opacity-40"
+            >
+              <SpindleAnim />
+            </div>
+            <div className="composer relative flex bg-[rgba(10,15,36,0.55)] border border-white/[0.13] rounded-[12px] px-4 pt-3.5 pb-3">
+              <textarea
+                id="composer"
+                ref={taRef}
+                rows={3}
+                value={text}
+                readOnly={pending}
+                autoComplete="off"
+                onChange={(e) => handleChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="flex-1 min-w-0 h-[68px] resize-none bg-transparent border-0 outline-none p-0 text-[15px] leading-[1.5] text-text caret-amber placeholder:text-[rgba(245,237,226,0.32)]"
+              />
+            </div>
+          </div>
+
+          <div className="mt-3 min-h-[40px] flex items-center gap-2.5 flex-wrap" aria-live="polite">
+            {phase === "reading" && (
+              <>
+                <span className="reading-dots inline-flex gap-1" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span className="text-[11px] text-muted">Reading your prompt</span>
+              </>
+            )}
+            {phase === "ready" && kind === "name" && (
+              <button
+                type="button"
+                onClick={handleAction}
+                disabled={pending}
+                className={`btn-name press anim-rise inline-flex items-center gap-2 rounded-[4px] px-4 py-2.5 text-[13px] font-semibold bg-white/[0.05] text-text border border-white/[0.22] disabled:opacity-60 ${RING}`}
+              >
+                {pending ? "Creating..." : "Create project"} <Arrow />
+              </button>
+            )}
+            {phase === "ready" && kind === "build" && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleAction}
+                  disabled={pending}
+                  className={`btn-build press anim-rise inline-flex items-center gap-2 rounded-[4px] px-4 py-2.5 text-[13px] font-semibold bg-amber text-[#2b1a00] border border-amber disabled:opacity-60 ${RING}`}
+                >
+                  {pending ? "Starting..." : "Build idea"} <Arrow />
+                </button>
+                <span className="text-[11px] text-muted">New project, orchestrator runs it</span>
+              </>
+            )}
+          </div>
+          {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
+        </div>
+      </section>
+
+      <main
+        ref={gridRef}
+        className="px-5 sm:px-7 py-8 border-t border-white/[0.09]"
+        style={{
+          backgroundImage: "radial-gradient(rgba(255,255,255,.06) 1px, transparent 1px)",
+          backgroundSize: "26px 26px",
+        }}
+      >
+        <div className="max-w-6xl mx-auto">
           <h1 className="text-[17px] font-semibold tracking-[-0.01em]">Your projects</h1>
           <p className="text-xs text-muted mt-1 mb-[22px]">Each project is its own canvas of agents, tools and sandboxes.</p>
 
           {listError && <div className="text-xs text-red-400 mb-4">{listError}</div>}
 
           {projects === null ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" aria-busy="true" aria-label="Loading projects">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" aria-busy="true" aria-label="Loading projects">
               {[0, 1, 2].map((i) => (
                 <div key={i} className="bg-white/[0.022] border border-white/[0.13] rounded-[13px] p-3">
                   <div className="h-3 w-1/2 mb-3 ml-0.5 rounded-[4px] bg-white/[0.07] animate-pulse motion-reduce:animate-none" />
@@ -218,9 +316,9 @@ export default function ProjectsScreen({
               ))}
             </div>
           ) : projects.length === 0 ? (
-            <p className="text-sm text-muted">No projects yet. Name one or describe an idea on the right.</p>
+            <p className="text-sm text-muted">No projects yet. Name one or describe an idea above.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {projects.map((p) => (
                 <div key={p.id} className="proj-card relative bg-white/[0.022] border border-white/[0.13] rounded-[13px] p-3">
                   <button onClick={() => onOpen(p)} className={`proj-open block w-full text-left rounded-[9px] ${RING}`}>
@@ -263,71 +361,27 @@ export default function ProjectsScreen({
               ))}
             </div>
           )}
-        </main>
+        </div>
+      </main>
 
-        <aside className="order-1 lg:order-2 relative flex flex-col lg:overflow-hidden bg-panel border-b lg:border-b-0 lg:border-l border-white/[0.09] px-7 pt-7 lg:pt-11">
-          <p className="text-[22px] font-semibold tracking-[-0.01em]">Hello{name && ` ${name}`}!</p>
-          <p className="text-[22px] font-semibold tracking-[-0.01em] leading-tight text-[rgba(245,237,226,0.55)] mt-0.5 mb-[34px]">
-            Shall we <span className="text-amber">Spindel</span> something?
-          </p>
-          <label htmlFor="composer" className="block text-xs text-[rgba(245,237,226,0.75)] mb-2">
-            Give us your idea or name your project
-          </label>
-          <div className="composer relative flex bg-[rgba(10,15,36,0.55)] border border-white/[0.13] rounded-[12px] px-4 pt-3.5 pb-3">
-            <textarea
-              id="composer"
-              ref={taRef}
-              rows={2}
-              value={text}
-              readOnly={pending}
-              autoComplete="off"
-              onChange={(e) => handleChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="flex-1 min-w-0 h-[46px] resize-none bg-transparent border-0 outline-none p-0 text-[15px] leading-[1.5] text-text caret-amber placeholder:text-[rgba(245,237,226,0.32)]"
-            />
-          </div>
-
-          <div className="mt-3 min-h-[40px] flex items-center gap-2.5 flex-wrap" aria-live="polite">
-            {phase === "reading" && (
-              <>
-                <span className="reading-dots inline-flex gap-1" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                <span className="text-[11px] text-muted">Reading your prompt</span>
-              </>
-            )}
-            {phase === "ready" && kind === "name" && (
-              <button
-                type="button"
-                onClick={handleAction}
-                disabled={pending}
-                className={`btn-name press anim-rise inline-flex items-center gap-2 rounded-[4px] px-4 py-2.5 text-[13px] font-semibold bg-white/[0.05] text-text border border-white/[0.22] disabled:opacity-60 ${RING}`}
-              >
-                {pending ? "Creating..." : "Create project"} <Arrow />
-              </button>
-            )}
-            {phase === "ready" && kind === "build" && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleAction}
-                  disabled={pending}
-                  className={`btn-build press anim-rise inline-flex items-center gap-2 rounded-[4px] px-4 py-2.5 text-[13px] font-semibold bg-amber text-[#2b1a00] border border-amber disabled:opacity-60 ${RING}`}
-                >
-                  {pending ? "Starting..." : "Build idea"} <Arrow />
-                </button>
-                <span className="text-[11px] text-muted">New project, orchestrator runs it</span>
-              </>
-            )}
-          </div>
-          {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-
-          <div className="mt-6 lg:mt-auto -mx-7 h-[120px] lg:h-[170px]">
-            <SpindleAnim />
-          </div>
-        </aside>
+      {/* Wrapper fades and slides; the button keeps .press scale to itself */}
+      <div
+        className={`pointer-events-none fixed inset-x-0 bottom-6 z-20 flex justify-center transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+          showJump ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 motion-reduce:translate-y-0"
+        } motion-reduce:transition-opacity`}
+      >
+        <button
+          type="button"
+          onClick={jumpToProjects}
+          aria-label="Jump to your projects"
+          aria-hidden={!showJump}
+          tabIndex={showJump ? 0 : -1}
+          className={`press inline-flex items-center gap-2 rounded-[4px] px-3.5 py-2 text-[12.5px] text-text bg-panel border border-white/[0.13] shadow-[0_8px_24px_rgba(10,15,36,0.7)] hoverable:border-white/30 ${
+            showJump ? "pointer-events-auto" : "pointer-events-none"
+          } ${RING}`}
+        >
+          Your projects <Down />
+        </button>
       </div>
     </div>
   );
