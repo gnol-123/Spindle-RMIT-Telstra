@@ -11,7 +11,8 @@ import MeshCanvas from "@/components/MeshCanvas";
 export default function Home() {
   const [checkedAuth, setCheckedAuth] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  // focusNodeId + initialPrompt: Build idea opens the orchestrator's chat and sends the idea.
+  const [active, setActive] = useState<{ project: Project; focusNodeId?: string; initialPrompt?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -69,11 +70,11 @@ export default function Home() {
     );
   }
 
-  if (!activeProject) {
+  if (!active) {
     return (
       <>
         {banner}
-        <ProjectsScreen onOpen={setActiveProject} onLoggedOut={() => setLoggedIn(false)} />
+        <ProjectsScreen onOpen={(project, focusNodeId, initialPrompt) => setActive({ project, focusNodeId, initialPrompt })} onLoggedOut={() => setLoggedIn(false)} />
       </>
     );
   }
@@ -81,7 +82,7 @@ export default function Home() {
   return (
     <>
       {banner}
-      <MeshCanvas project={activeProject} onBack={() => setActiveProject(null)} />
+      <MeshCanvas project={active.project} focusNodeId={active.focusNodeId} initialPrompt={active.initialPrompt} onBack={() => setActive(null)} />
     </>
   );
 }

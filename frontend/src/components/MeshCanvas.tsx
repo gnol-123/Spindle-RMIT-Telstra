@@ -54,9 +54,15 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
 
 export default function MeshCanvas({
   project,
+  focusNodeId,
+  initialPrompt,
   onBack,
 }: {
   project: Project;
+  // Agent to select and open the chat for on mount.
+  focusNodeId?: string;
+  // First message for the focused agent, sent by its chat once.
+  initialPrompt?: string;
   onBack: () => void;
 }) {
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([]);
@@ -70,7 +76,7 @@ export default function MeshCanvas({
   // beat — the "every node opens disconnected" bug. Gating the first paint
   // on all of it landing together fixes that at the source.
   const [initialLoading, setInitialLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(focusNodeId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [paletteTab, setPaletteTab] = useState<PaletteTab>("agents");
@@ -88,7 +94,9 @@ export default function MeshCanvas({
   // transcript is fetched once per node on first open (see ChatWindow).
   const [chatByNode, setChatByNode] = useState<Record<string, ChatState>>({});
   // Which agent's chat window is open, if any.
-  const [chatNodeId, setChatNodeId] = useState<string | null>(null);
+  const [chatNodeId, setChatNodeId] = useState<string | null>(focusNodeId ?? null);
+  // Keyed by node id; cleared on send so reopening the chat doesn't resend.
+  const initialPromptRef = useRef(focusNodeId && initialPrompt ? { nodeId: focusNodeId, text: initialPrompt } : null);
   // The code preview: which environment, and which folder to reveal.
   const [workspace, setWorkspace] = useState<{ envId: string; path: string | null } | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -779,7 +787,7 @@ export default function MeshCanvas({
           </button>
           <BrandLockup />
           <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-[-0.01em]">Spindle</div>
+            <div className="text-sm font-semibold tracking-[-0.01em]">Spindel</div>
             <div className="text-[10.5px] text-white/[0.38] truncate max-w-[200px]" title={project.name}>
               {project.name}
             </div>
@@ -1010,6 +1018,8 @@ export default function MeshCanvas({
           onRefreshEdge={handleRefreshEdge}
           onOpenWorkspace={openWorkspace}
           onNodeUpdated={handleNodeUpdated}
+          initialPrompt={initialPromptRef.current?.nodeId === chatNode.id ? initialPromptRef.current.text : undefined}
+          onInitialPromptSent={() => (initialPromptRef.current = null)}
         />
       )}
 

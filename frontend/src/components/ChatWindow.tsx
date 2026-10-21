@@ -221,6 +221,8 @@ export default function ChatWindow({
   onRefreshEdge,
   onOpenWorkspace,
   onNodeUpdated,
+  initialPrompt,
+  onInitialPromptSent,
 }: {
   projectId: string;
   node: AgentNode; // carries a polled `status`, refreshed every 2s by the canvas
@@ -236,8 +238,12 @@ export default function ChatWindow({
   // Opens the code preview on one of this agent's environments, at its folder.
   onOpenWorkspace?: (envId: string, path?: string | null) => void;
   onNodeUpdated: (node: ProjectNode) => void;
+  // Sent once through send() after hydration (Build idea from the projects screen).
+  initialPrompt?: string;
+  onInitialPromptSent?: () => void;
 }) {
   const { messages, draft, useStream, busy, pendingCalls, approvals, historyLoaded } = chat;
+  const initialSentRef = useRef(false);
   const icon = AGENT_ICONS[node.agent_slug] ?? "◆";
   const nameOf = (id: string) => nodes.find((n) => n.id === id);
 
@@ -438,6 +444,15 @@ export default function ChatWindow({
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.status, historyLoaded, busy]);
+
+  // Waits for hydration and the attach check to settle so send() isn't dropped as busy.
+  useEffect(() => {
+    if (!initialPrompt || initialSentRef.current || !historyLoaded || busy || attachingRef.current) return;
+    initialSentRef.current = true;
+    onInitialPromptSent?.();
+    send(initialPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPrompt, historyLoaded, busy]);
 
   async function clearStale() {
     if (stale.length === 0) return;

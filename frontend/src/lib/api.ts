@@ -91,7 +91,7 @@ function isExpired(token: string, skewSeconds = 60): boolean {
 
 async function request<T>(
   path: string,
-  opts: { method?: string; body?: unknown; auth?: boolean } = {}
+  opts: { method?: string; body?: unknown; auth?: boolean; signal?: AbortSignal } = {}
 ): Promise<T> {
   const send = async (token?: string) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -100,6 +100,7 @@ async function request<T>(
       method: opts.method ?? "GET",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     });
   };
 
@@ -210,6 +211,25 @@ export async function createProject(name: string, description?: string) {
     method: "POST",
     auth: true,
     body: { name, description },
+  });
+}
+
+// Jev's read of the composer text: a project name or an idea to build.
+export async function classifyPrompt(text: string, signal?: AbortSignal) {
+  return request<{ kind: "name" | "build" }>("/projects/classify", {
+    method: "POST",
+    auth: true,
+    body: { text },
+    signal,
+  });
+}
+
+// Creates the project plus an orchestrator agent for the idea.
+export async function buildProject(idea: string) {
+  return request<{ project: Project; orchestrator_node_id: string }>("/projects/build", {
+    method: "POST",
+    auth: true,
+    body: { idea },
   });
 }
 
