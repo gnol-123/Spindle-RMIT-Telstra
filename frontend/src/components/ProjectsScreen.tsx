@@ -5,6 +5,7 @@ import {
   listProjects,
   createProject,
   deleteProject,
+  renameProject,
   logout,
   getMe,
   classifyPrompt,
@@ -32,6 +33,14 @@ function Arrow() {
   );
 }
 
+function Pencil() {
+  return (
+    <svg viewBox="0 0 256 256" fill="none" stroke="currentColor" strokeWidth="20" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3" aria-hidden="true">
+      <path d="M96 216H48a8 8 0 0 1-8-8v-44.7a8 8 0 0 1 2.3-5.6L160 40a8 8 0 0 1 11.3 0l44.7 44.7a8 8 0 0 1 0 11.3L96 216ZM136 64l56 56" />
+    </svg>
+  );
+}
+
 function Down() {
   return (
     <svg viewBox="0 0 256 256" fill="none" stroke="currentColor" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3" aria-hidden="true">
@@ -52,6 +61,10 @@ export default function ProjectsScreen({
   const [listError, setListError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<{ id: string; message: string } | null>(null);
+  // Enter, blur and Escape can all fire for one edit: only the first counts.
+  const editDone = useRef(false);
 
   // Composer
   const [text, setText] = useState("");
@@ -188,6 +201,28 @@ export default function ProjectsScreen({
     }
   }
 
+  function startRename(p: Project) {
+    editDone.current = false;
+    setRenameError(null);
+    setEditingId(p.id);
+  }
+
+  async function finishRename(p: Project, raw: string, save: boolean) {
+    if (editDone.current) return;
+    editDone.current = true;
+    setEditingId(null);
+    const next = raw.trim();
+    if (!save || !next || next === p.name) return;
+    const setName = (name: string) => setProjects((l) => (l ?? []).map((x) => (x.id === p.id ? { ...x, name } : x)));
+    setName(next);
+    try {
+      await renameProject(p.id, next);
+    } catch (e) {
+      setName(p.name);
+      setRenameError({ id: p.id, message: e instanceof ApiError ? e.message : "Could not rename project" });
+    }
+  }
+
   // Pill shows only while the projects section is off screen.
   useEffect(() => {
     const el = gridRef.current;
@@ -201,6 +236,17 @@ export default function ProjectsScreen({
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
     gridRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   }
+
+  const preview = (p: Project) => (
+    <div className="relative aspect-[16/10] rounded-[9px] bg-bg border border-white/[0.09] overflow-hidden">
+      {p.preview_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={p.preview_url} alt="" loading="lazy" className="absolute inset-0 w-full h-full object-cover object-top" />
+      ) : (
+        <div className="absolute inset-0 grid place-items-center text-[10.5px] text-muted">No preview yet</div>
+      )}
+    </div>
+  );
 
   const name = firstName(user);
   const showJump = !gridInView && projects !== null && projects.length > 0;
@@ -322,17 +368,40 @@ export default function ProjectsScreen({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {projects.map((p) => (
                 <div key={p.id} className="proj-card relative bg-white/[0.022] border border-white/[0.13] rounded-[13px] p-3">
-                  <button onClick={() => onOpen(p)} className={`proj-open block w-full text-left rounded-[9px] ${RING}`}>
-                    <div className="text-[13px] font-medium mb-2.5 ml-0.5 pr-6 truncate">{p.name}</div>
-                    <div className="relative aspect-[16/10] rounded-[9px] bg-bg border border-white/[0.09] overflow-hidden">
-                      {p.preview_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={p.preview_url} alt="" loading="lazy" className="absolute inset-0 w-full h-full object-cover object-top" />
-                      ) : (
-                        <div className="absolute inset-0 grid place-items-center text-[10.5px] text-muted">No preview yet</div>
-                      )}
+                  {editingId === p.id ? (
+                    <div className="block w-full rounded-[9px]">
+                      <input
+                        autoFocus
+                        defaultValue={p.name}
+                        maxLength={200}
+                        aria-label={`New name for ${p.name}`}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={(e) => finishRename(p, e.currentTarget.value, true)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") finishRename(p, e.currentTarget.value, true);
+                          else if (e.key === "Escape") finishRename(p, e.currentTarget.value, false);
+                        }}
+                        className="block w-[calc(100%-3rem)] text-[13px] font-medium mb-2.5 ml-0.5 px-1.5 py-0.5 -my-0.5 rounded-[4px] bg-white/[0.06] shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)] border-0 outline-none caret-amber text-text"
+                      />
+                      {preview(p)}
                     </div>
-                  </button>
+                  ) : (
+                    <>
+                      <button onClick={() => onOpen(p)} className={`proj-open block w-full text-left rounded-[9px] ${RING}`}>
+                        <div className="text-[13px] font-medium mb-2.5 ml-0.5 pr-12 truncate">{p.name}</div>
+                        {renameError?.id === p.id && <p className="text-[11px] text-red-400 -mt-1.5 mb-2 ml-0.5">{renameError.message}</p>}
+                        {preview(p)}
+                      </button>
+                      <button
+                        onClick={() => startRename(p)}
+                        title="Rename project"
+                        aria-label={`Rename ${p.name}`}
+                        className={`proj-x absolute top-[9px] right-[30px] p-1 text-white/30 hoverable:text-text rounded transition-opacity duration-150 ${RING}`}
+                      >
+                        <Pencil />
+                      </button>
+                    </>
+                  )}
 
                   {confirmingId === p.id ? (
                     <div className="flex items-center gap-2 mt-2.5 flex-wrap">

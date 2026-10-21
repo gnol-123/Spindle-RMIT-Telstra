@@ -623,19 +623,19 @@ export default function ChatWindow({
   return (
     <div
       className={`fixed inset-0 z-[60] bg-black/[0.66] backdrop-blur-[3px] grid place-items-center anim-fadein ${
-        panelOpen ? "p-4" : "p-9"
+        panelOpen ? "p-4" : "p-6"
       }`}
       onClick={onClose}
     >
       <div
         className={`${
-          panelOpen ? "w-full max-w-[1600px] h-full" : "w-[min(880px,100%)] h-[min(660px,100%)]"
+          panelOpen ? "w-full max-w-[1600px] h-full" : "w-[min(1200px,100%)] h-[min(920px,100%)]"
         } relative bg-modal border border-accent/[0.34] rounded-2xl shadow-[0_40px_120px_rgba(0,0,0,.8),0_0_70px_rgba(92,141,255,.09)] flex overflow-hidden anim-pop`}
         onClick={(e) => e.stopPropagation()}
       >
         <div
           className={`${
-            panelOpen ? "flex-none w-[440px] max-[900px]:w-full border-r border-white/[0.09]" : "flex-1"
+            panelOpen ? "flex-none w-[clamp(440px,36%,600px)] max-[900px]:w-full border-r border-white/[0.09]" : "flex-1"
           } min-w-0 flex flex-col`}
         >
         {/* header */}

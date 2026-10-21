@@ -296,6 +296,22 @@ class ProjectRepository:
         ).data
         return Project(id=rows[0]["id"], name=rows[0]["name"]) if rows else None
 
+    def rename_project(self, project_id: str, name: str) -> Project | None:
+        """Rename an owned project. None when missing or not the caller's."""
+        try:
+            rows = (
+                self._db.table("projects")
+                .update({"name": name})
+                .eq("id", project_id)
+                .eq("owner_id", self._user_id)
+                .execute()
+            ).data
+        except APIError as exc:
+            if exc.code == _UNIQUE_VIOLATION:
+                raise DuplicateProjectName(name) from exc
+            raise
+        return Project(id=rows[0]["id"], name=rows[0]["name"]) if rows else None
+
     def set_canvas_snapshot_at(self, project_id: str) -> None:
         (
             self._db.table("projects")

@@ -237,6 +237,10 @@ export async function deleteProject(projectId: string) {
   return request<void>(`/projects/${projectId}`, { method: "DELETE", auth: true });
 }
 
+export async function renameProject(projectId: string, name: string) {
+  return request<Project>(`/projects/${projectId}`, { method: "PATCH", auth: true, body: { name } });
+}
+
 // Card preview of the canvas, raw image bytes.
 export async function uploadCanvasSnapshot(projectId: string, blob: Blob): Promise<void> {
   await authedFetch(`/projects/${projectId}/canvas-snapshot`, {
