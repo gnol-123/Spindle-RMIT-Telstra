@@ -36,6 +36,7 @@ from app.routers.environments import EnvironmentNodeResponse, create_environment
 from app.services import intake, previews_storage
 from app.services.models import ModelsUnavailable, list_models
 from app.tools.base import ToolContext
+from app.tools.mcp.base import POOLED_VERIFY
 from app.tools.oauth_refresh import TokenExchangeError, with_access_token
 from app.tools.registry import get_spec, platform_secrets
 from app.workflows import cancel_for_node, cancel_for_project, refresh_edge
@@ -81,27 +82,32 @@ async def create_project(
         ) from exc
 
     # Every project owns a scratch space. Not provisioned yet: pending costs nothing.
-    await to_thread.run_sync(lambda: env_repo.ensure_scratch_node(project.id))
+    await to_thread.run_sync(lambda: env_repo.ensure_scratch_node(project.id, new_project=True))
     return ProjectResponse.of(project)
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
 async def list_projects(repo: ProjectRepo) -> list[ProjectResponse]:
     projects = await to_thread.run_sync(repo.list_projects)
-    thumbs = await to_thread.run_sync(repo.latest_thumbnails, [p.id for p in projects])
-    # App screenshot first, then the canvas snapshot.
+    # App screenshot first, then the canvas snapshot. The canvas file is
+    # overwritten in place, so its snapshot time versions the cached URL.
     paths = {
-        p.id: thumbs.get(p.id) or f"{p.id}/{_CANVAS_FILE}"
+        (p.thumbnail_path or f"{p.id}/{_CANVAS_FILE}"): (
+            None if p.thumbnail_path else p.canvas_snapshot_at
+        )
         for p in projects
-        if p.id in thumbs or p.canvas_snapshot_at
+        if p.thumbnail_path or p.canvas_snapshot_at
     }
     urls: dict[str, str] = {}
     if paths:
         try:
-            urls = await to_thread.run_sync(previews_storage.sign, list(paths.values()))
+            urls = await to_thread.run_sync(previews_storage.sign_cached, paths)
         except Exception:
             log.warning("preview signing failed; listing without previews", exc_info=True)
-    return [ProjectResponse.of(p, urls.get(paths.get(p.id, ""))) for p in projects]
+    return [
+        ProjectResponse.of(p, urls.get(p.thumbnail_path or f"{p.id}/{_CANVAS_FILE}"))
+        for p in projects
+    ]
 
 
 # Stripped first, so blank input is a 422.
@@ -268,14 +274,14 @@ async def _wrong_kind_detail(node_id: UUID, tool_repo: ToolRepo, env_repo: EnvRe
 async def delete_project(project_id: UUID, repo: ProjectRepo, env_repo: EnvRepo) -> None:
     """Delete a project, cascading to its nodes, edges, conversations and messages."""
     # Stop every running turn first: otherwise it keeps writing into a
-    # conversation the delete is about to cascade away.
-    await cancel_for_project(str(project_id))
-
-    # Every environment on the canvas, before the rows cascade away and the
-    # sandbox ids go with them.
-    environments = await to_thread.run_sync(env_repo.list_environment_nodes, str(project_id))
-    for env in environments:
-        await lifecycle.teardown(env_repo, env)
+    # conversation the delete is about to cascade away. Every environment on
+    # the canvas is read before the rows cascade away and the sandbox ids go.
+    _, environments = await asyncio.gather(
+        cancel_for_project(str(project_id)),
+        to_thread.run_sync(env_repo.list_environment_nodes, str(project_id)),
+    )
+    # teardown never raises, so gather cannot abandon a sibling.
+    await asyncio.gather(*(lifecycle.teardown(env_repo, env) for env in environments))
 
     deleted = await to_thread.run_sync(repo.delete_project, str(project_id))
     if not deleted:
@@ -470,31 +476,65 @@ async def provision_agent(
     The agent branch of POST /nodes, shared with the canvas tool so an
     orchestrator-made agent is indistinguishable from a user-made one.
     """
-    node_id = await to_thread.run_sync(
-        lambda: repo.create_node(
-            project_id,
-            agent_type.id,
-            name,
-            position_x=position_x,
-            position_y=position_y,
-            tool_policy=tool_policy,
-        )
-    )
-
-    # Access requires an edge, so the scratch space is wired like any other
-    # environment. The frontend hides this one rather than drawing it.
-    scratch = await to_thread.run_sync(lambda: env_repo.ensure_scratch_node(project_id))
-    try:
-        await to_thread.run_sync(lambda: repo.create_edge(scratch.id, node_id, "environment"))
-    except DuplicateEdge:
-        # A retried create. The wiring is already there.
-        pass
-
     req = CreateNodeRequest(
         agent_slug=agent_type.slug, position_x=position_x, position_y=position_y
     )
-    await _wire_default_presets(project_id, node_id, agent_type, req, repo, tool_repo)
+
+    # The scratch lookup and the default tool nodes don't need the agent id,
+    # so they run alongside the node insert.
+    node_res, scratch, tools = await asyncio.gather(
+        to_thread.run_sync(
+            lambda: repo.create_node(
+                project_id,
+                agent_type.id,
+                name,
+                position_x=position_x,
+                position_y=position_y,
+                tool_policy=tool_policy,
+                with_conversation=False,
+            )
+        ),
+        to_thread.run_sync(lambda: env_repo.ensure_scratch_node(project_id)),
+        _create_default_tools(project_id, agent_type, req, tool_repo),
+        return_exceptions=True,
+    )
+    failed = next((r for r in (node_res, scratch, tools) if isinstance(r, BaseException)), None)
+    if failed is not None:
+        if isinstance(tools, list) and tools:
+            log.error("agent create failed; orphan tool nodes %s", [t.id for t in tools])
+        raise failed
+    node_id: str = node_res
+
+    # Conversation and edges both only need the node id.
+    await asyncio.gather(
+        to_thread.run_sync(lambda: repo.create_conversation(node_id, project_id)),
+        _wire_agent(node_id, scratch.id, [t.id for t in tools], repo),
+    )
+    _verify_in_background(tools, tool_repo)
     return node_id
+
+
+async def _wire_agent(
+    node_id: str, scratch_id: str, tool_ids: list[str], repo: ProjectRepo
+) -> None:
+    # Access requires an edge, so the scratch space is wired like any other
+    # environment. The frontend hides this one rather than drawing it.
+    edges = [(scratch_id, node_id, "environment"), *((t, node_id, "tool") for t in tool_ids)]
+    try:
+        await to_thread.run_sync(repo.create_edges, edges)
+    except Exception:
+        log.warning("bulk edge insert failed for agent %s; retrying one by one", node_id)
+        for src, tgt, kind in edges:
+            try:
+                await to_thread.run_sync(lambda a=(src, tgt, kind): repo.create_edge(*a))
+            except DuplicateEdge:
+                # A retried create. The wiring is already there.
+                pass
+            except Exception:
+                if kind == "environment":
+                    raise
+                # The tool node exists with no edge. Named so it can be cleaned up.
+                log.exception("edge failed; orphan tool node %s", src)
 
 
 @router.post(
@@ -510,7 +550,12 @@ async def create_node(
     env_repo: EnvRepo,
 ) -> NodeResponse | ToolNodeResponse | EnvironmentNodeResponse:
     """Provision a box on a project's canvas: kind='agent', 'tool' or 'environment'."""
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    # The agent type read doesn't depend on the project one; sleep(0) is a None placeholder.
+    agent_slug = req.agent_slug if req.kind == "agent" else None
+    project, agent_type = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.get_agent_type, agent_slug) if agent_slug else asyncio.sleep(0),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
@@ -526,17 +571,17 @@ async def create_node(
             detail="agent_slug is required for kind='agent'",
         )
 
-    agent_type = await to_thread.run_sync(repo.get_agent_type, req.agent_slug)
     if agent_type is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown agent '{req.agent_slug}'",
         )
 
+    name = req.name or agent_type.name
     node_id = await provision_agent(
         str(project_id),
         agent_type,
-        req.name or agent_type.name,
+        name,
         position_x=req.position_x,
         position_y=req.position_y,
         tool_policy=req.tool_policy,
@@ -545,13 +590,20 @@ async def create_node(
         env_repo=env_repo,
     )
 
-    node = await to_thread.run_sync(repo.get_agent_node, node_id)
-    if node is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Node could not be read back after creation",
-        )
-    return NodeResponse.of(node, agent_type.slug)
+    # Built from the template and the request: the insert has nothing else to say.
+    node = Node(
+        id=node_id,
+        project_id=str(project_id),
+        name=name,
+        agent_type_id=agent_type.id,
+        system_prompt=agent_type.system_prompt,
+        model=agent_type.model,
+        tool_policy=req.tool_policy,
+        position_x=req.position_x,
+        position_y=req.position_y,
+        agent_slug=agent_type.slug,
+    )
+    return NodeResponse.of(node)
 
 
 class UsageModelResponse(BaseModel):
@@ -607,22 +659,24 @@ async def get_user_usage(repo: ProjectRepo) -> UsageResponse:
 @router.get("/projects/{project_id}/usage", response_model=UsageResponse)
 async def get_usage(project_id: UUID, repo: ProjectRepo) -> UsageResponse:
     """This user's token usage in one project, broken down by model."""
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    project, totals = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.get_usage, str(project_id)),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    totals = await to_thread.run_sync(repo.get_usage, str(project_id))
     return UsageResponse.of(totals, project_id)
 
 
 @router.get("/projects/{project_id}/nodes", response_model=list[NodeResponse])
 async def list_nodes(project_id: UUID, repo: ProjectRepo) -> list[NodeResponse]:
     """List every box on a project's canvas, agents and tools."""
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    project, nodes = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.list_nodes, str(project_id)),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    nodes = await to_thread.run_sync(repo.list_nodes, str(project_id))
     return [NodeResponse.of(n) for n in nodes]
 
 
@@ -645,7 +699,9 @@ async def list_node_messages(
     node = await to_thread.run_sync(repo.get_agent_node, str(node_id))
     if node is None or node.project_id != str(project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    conversation_id = await to_thread.run_sync(repo.get_conversation_for_node, node.id)
+    conversation_id = node.conversation_id or await to_thread.run_sync(
+        repo.get_conversation_for_node, node.id
+    )
     if conversation_id is None:
         return []
     messages = await to_thread.run_sync(
@@ -709,14 +765,16 @@ async def delete_node(
     """Remove a node of any kind, cascading to its conversation, transcript and secrets."""
     # Stop a running turn first: only agent nodes have a conversation, so a
     # tool/environment node's None id is a no-op.
-    conversation_id = await to_thread.run_sync(repo.get_conversation_for_node, str(node_id))
-    await cancel_for_node(conversation_id)
-
+    conversation_id, env = await asyncio.gather(
+        to_thread.run_sync(repo.get_conversation_for_node, str(node_id)),
+        to_thread.run_sync(env_repo.get_environment_node, str(node_id)),
+    )
     # Kill the sandbox first: the row is about to go, and nothing else knows
     # the id. teardown never raises, so a dead E2B cannot block the delete.
-    env = await to_thread.run_sync(env_repo.get_environment_node, str(node_id))
-    if env is not None:
-        await lifecycle.teardown(env_repo, env)
+    await asyncio.gather(
+        cancel_for_node(conversation_id),
+        *([lifecycle.teardown(env_repo, env)] if env is not None else []),
+    )
 
     deleted = await to_thread.run_sync(repo.delete_node, str(node_id))
     if not deleted:
@@ -752,6 +810,13 @@ def _split_tool_config(
     return plain, secrets
 
 
+def _with_default_url(tool_type: ToolType, config: dict[str, Any]) -> dict[str, Any]:
+    default_url = tool_type.config_schema.get("default_url")
+    if default_url and not config.get("url"):
+        return {**config, "url": default_url}
+    return config
+
+
 async def _provision_tool_node(
     project_id: str,
     tool_type: ToolType,
@@ -771,9 +836,7 @@ async def _provision_tool_node(
     """
     # Copy the catalog default url when config omits one, keeping the node
     # self-contained against later catalog edits.
-    default_url = tool_type.config_schema.get("default_url")
-    if default_url and not config.get("url"):
-        config = {**config, "url": default_url}
+    config = _with_default_url(tool_type, config)
 
     node_id = await to_thread.run_sync(
         lambda: tool_repo.create_tool_node(
@@ -857,43 +920,39 @@ async def _create_tool_node(
     return ToolNodeResponse.of(node, secrets_set)
 
 
-def _load_catalog(
+async def _load_catalog(
     tool_repo: ToolRepository,
 ) -> tuple[dict[str, ToolPreset], dict[str, ToolType]]:
     """The preset and tool type catalogs, keyed by slug. Two reads, not two per preset."""
-    return (
-        {p.slug: p for p in tool_repo.list_presets()},
-        {t.slug: t for t in tool_repo.list_tool_types()},
+    presets, tool_types = await asyncio.gather(
+        to_thread.run_sync(tool_repo.list_presets),
+        to_thread.run_sync(tool_repo.list_tool_types),
     )
+    return {p.slug: p for p in presets}, {t.slug: t for t in tool_types}
 
 
-async def _wire_default_presets(
+async def _create_default_tools(
     project_id: str,
-    node_id: str,
     agent_type: AgentType,
     req: CreateNodeRequest,
-    repo: ProjectRepo,
     tool_repo: ToolRepo,
-) -> None:
-    """Create and connect the presets an agent type lists.
+) -> list[ToolNode]:
+    """Create the tool nodes for the presets an agent type lists. Returns them, unread.
 
-    Each preset is independent: an unknown slug or a failed create is logged
-    and skipped, never raised, so a typo in a seed cannot block creating an
-    agent. Not transactional, by the same reasoning as the scratch edge: a
+    One bulk insert. If it fails, each preset is retried on its own: an
+    unknown slug or a failed create is logged and skipped, never raised, so a
+    typo in a seed cannot block creating an agent. Not transactional: a
     half-wired agent is visible and deletable. Nothing here is idempotent: a
     retried request creates a second agent and a second set of defaults.
+    Defaults carry no secrets, so there is nothing to store or verify inline.
     """
     if not agent_type.default_presets:
-        return
+        return []
 
-    # Two catalog reads instead of two per preset: these rows are static for
-    # the life of the request, and a 12 preset agent was paying 24 round
-    # trips to re-read them.
-    presets, tool_types = await to_thread.run_sync(_load_catalog, tool_repo)
+    presets, tool_types = await _load_catalog(tool_repo)
 
-    # Slot index is fixed up front so the presets can run concurrently
-    # without their positions depending on completion order.
-    planned: list[tuple[int, ToolPreset, ToolType]] = []
+    # Slot index is fixed up front so positions don't depend on completion order.
+    planned: list[tuple[ToolPreset, ToolType, float, float]] = []
     for slug in agent_type.default_presets:
         preset = presets.get(slug)
         if preset is None:
@@ -903,41 +962,83 @@ async def _wire_default_presets(
         if tool_type is None:
             log.warning("preset %s names unknown tool type %s", slug, preset.tool_slug)
             continue
-        planned.append((len(planned), preset, tool_type))
+        planned.append(
+            (
+                preset,
+                tool_type,
+                req.position_x + _DEFAULT_TOOL_DX,
+                req.position_y + len(planned) * _DEFAULT_TOOL_DY,
+            )
+        )
+    if not planned:
+        return []
 
-    async def wire(slot: int, preset: ToolPreset, tool_type: ToolType) -> None:
+    rows = [
+        {
+            "tool_type_id": tool_type.id,
+            "name": preset.name,
+            "config": _with_default_url(tool_type, dict(preset.config)),
+            "position_x": x,
+            "position_y": y,
+        }
+        for preset, tool_type, x, y in planned
+    ]
+
+    # Built from what was inserted, so background verify skips a re-read.
+    def node(node_id: str, row: dict, tool_type: ToolType) -> ToolNode:
+        return ToolNode(
+            id=node_id,
+            project_id=project_id,
+            name=row["name"],
+            tool_type_id=tool_type.id,
+            tool_slug=tool_type.slug,
+            config=row["config"],
+            status="pending",
+            status_detail=None,
+        )
+
+    try:
+        ids = await to_thread.run_sync(tool_repo.create_tool_nodes, project_id, rows)
+    except Exception:
+        log.exception(
+            "bulk default tool insert failed for %s; retrying one by one", agent_type.slug
+        )
+    else:
+        return [node(i, r, p[1]) for i, r, p in zip(ids, rows, planned, strict=True)]
+
+    tools: list[ToolNode] = []
+
+    async def one(row: dict, preset: ToolPreset, tool_type: ToolType) -> None:
         try:
-            tool_id = await _provision_tool_node(
+            node_id = await _provision_tool_node(
                 project_id,
                 tool_type,
                 preset.name,
                 dict(preset.config),
                 {},
-                position_x=req.position_x + _DEFAULT_TOOL_DX,
-                position_y=req.position_y + slot * _DEFAULT_TOOL_DY,
+                position_x=row["position_x"],
+                position_y=row["position_y"],
                 tool_repo=tool_repo,
                 verify=False,
             )
+            tools.append(node(node_id, row, tool_type))
         except Exception:
-            log.exception("default preset %s failed for agent %s", preset.slug, node_id)
-            return
-        tool_ids.append(tool_id)
-        try:
-            await to_thread.run_sync(lambda t=tool_id: repo.create_edge(t, node_id, "tool"))
-        except Exception:
-            # The tool node exists with no edge. Named so it can be cleaned up.
-            log.exception("edge for preset %s failed; orphan tool node %s", preset.slug, tool_id)
+            log.exception(
+                "default preset %s failed for agent type %s", preset.slug, agent_type.slug
+            )
 
-    # Each preset is independent, so wire them at once rather than paying
-    # ~6 sequential round trips each. gather never raises: wire swallows.
-    tool_ids: list[str] = []
     async with anyio.create_task_group() as tg:
-        for slot, preset, tool_type in planned:
-            tg.start_soon(wire, slot, preset, tool_type)
+        for row, (preset, tool_type, _, _) in zip(rows, planned, strict=True):
+            tg.start_soon(one, row, preset, tool_type)
+    return tools
 
+
+def _verify_in_background(tools: list[ToolNode], tool_repo: ToolRepo) -> None:
     # Verify hits the network (MCP handshake, API ping) and was gating the
     # response. Rows sit at 'pending' until it lands; the canvas poll shows it.
-    task = asyncio.create_task(_verify_all(tool_ids, tool_repo))
+    if not tools:
+        return
+    task = asyncio.create_task(_verify_defaults(tools, tool_repo))
     _background.add(task)
     task.add_done_callback(_background.discard)
 
@@ -946,23 +1047,72 @@ async def _wire_default_presets(
 _background: set[asyncio.Task] = set()
 
 
-async def _verify_all(tool_ids: list[str], tool_repo: ToolRepo) -> None:
-    async def one(tool_id: str) -> None:
-        try:
-            await _verify_tool_node(tool_id, tool_repo)
-        except Exception:
-            log.exception("background verify failed for tool node %s", tool_id)
-            # Never leave it 'pending': the canvas spins its agent until it isn't.
-            try:
-                await to_thread.run_sync(
-                    lambda: tool_repo.set_node_status(tool_id, "error", "Verification failed.")
-                )
-            except Exception:
-                log.exception("could not mark tool node %s as error", tool_id)
+async def _verify_defaults(tools: list[ToolNode], tool_repo: ToolRepo) -> None:
+    """Verify fresh default tool nodes: no re-reads, one status PATCH per outcome.
 
+    Defaults carry no secrets, so there are no keys to read. MCP verify goes
+    through the pool, so the handshake is shared with later turns.
+    """
+    groups: dict[tuple[str, str | None], list[str]] = {}
+
+    async def one(node: ToolNode) -> None:
+        try:
+            status_, detail, found = await _check_tool_node(node, [])
+            if found is not None:
+                config = {**node.config, "discovered_tools": found}
+                await to_thread.run_sync(lambda: tool_repo.set_node_config(node.id, config))
+        except Exception:
+            log.exception("background verify failed for tool node %s", node.id)
+            # Never leave it 'pending': the canvas spins its agent until it isn't.
+            status_, detail = "error", "Verification failed."
+        groups.setdefault((status_, detail), []).append(node.id)
+
+    async def write(outcome: tuple[str, str | None], ids: list[str]) -> None:
+        try:
+            await to_thread.run_sync(lambda: tool_repo.set_nodes_status(ids, *outcome))
+            return
+        except Exception:
+            log.exception("batch status write failed for %s; retrying one by one", ids)
+        for node_id in ids:
+            try:
+                await to_thread.run_sync(lambda i=node_id: tool_repo.set_node_status(i, *outcome))
+            except Exception:
+                log.exception("could not write status for tool node %s", node_id)
+
+    token = POOLED_VERIFY.set(True)
+    try:
+        async with anyio.create_task_group() as tg:
+            for node in tools:
+                tg.start_soon(one, node)
+    finally:
+        POOLED_VERIFY.reset(token)
     async with anyio.create_task_group() as tg:
-        for tool_id in tool_ids:
-            tg.start_soon(one, tool_id)
+        for outcome, ids in groups.items():
+            tg.start_soon(write, outcome, ids)
+
+
+async def _check_tool_node(
+    node: ToolNode, keys: list[str]
+) -> tuple[str, str | None, list[str] | None]:
+    """spec.verify one node: (status, detail, discovered_tools). Writes nothing."""
+    spec = get_spec(node.tool_slug)
+    if spec is None:
+        return "error", f"Unknown tool '{node.tool_slug}'", None
+
+    try:
+        secrets = await to_thread.run_sync(lambda: load_node_secrets(node.id, keys))
+    except RuntimeError:
+        return "error", "Secrets are unavailable", None
+
+    secrets = {**platform_secrets(node.tool_slug), **secrets}
+    try:
+        secrets = await with_access_token(node.tool_slug, node.id, secrets)
+    except TokenExchangeError:
+        # Revoked at Google. Never retry, let the node go to error.
+        return "error", "Access was revoked. Reconnect the node.", None
+
+    result = await spec.verify(ToolContext(node.id, node.name, node.config, secrets))
+    return ("ready" if result.ok else "error"), result.detail, result.discovered_tools
 
 
 async def _verify_tool_node(node_id: str, tool_repo: ToolRepo) -> None:
@@ -971,44 +1121,17 @@ async def _verify_tool_node(node_id: str, tool_repo: ToolRepo) -> None:
     if node is None:
         return
 
-    spec = get_spec(node.tool_slug)
-    if spec is None:
-        await to_thread.run_sync(
-            lambda: tool_repo.set_node_status(node.id, "error", f"Unknown tool '{node.tool_slug}'")
-        )
-        return
+    keys: list[str] = []
+    if get_spec(node.tool_slug) is not None:
+        keys = await to_thread.run_sync(tool_repo.secret_keys, node.id)
+    status_, detail, found = await _check_tool_node(node, keys)
 
-    keys = await to_thread.run_sync(tool_repo.secret_keys, node.id)
-    try:
-        secrets = await to_thread.run_sync(lambda: load_node_secrets(node.id, keys))
-    except RuntimeError:
-        await to_thread.run_sync(
-            lambda: tool_repo.set_node_status(node.id, "error", "Secrets are unavailable")
-        )
-        return
-
-    secrets = {**platform_secrets(node.tool_slug), **secrets}
-    try:
-        secrets = await with_access_token(node.tool_slug, node.id, secrets)
-    except TokenExchangeError:
-        # Revoked at Google. Never retry, let the node go to error.
-        await to_thread.run_sync(
-            lambda: tool_repo.set_node_status(
-                node.id, "error", "Access was revoked. Reconnect the node."
-            )
-        )
-        return
-
-    result = await spec.verify(ToolContext(node.id, node.name, node.config, secrets))
-
-    if result.discovered_tools is not None:
+    if found is not None:
         merged_config = dict(node.config)
-        merged_config["discovered_tools"] = result.discovered_tools
+        merged_config["discovered_tools"] = found
         await to_thread.run_sync(lambda: tool_repo.set_node_config(node.id, merged_config))
 
-    await to_thread.run_sync(
-        lambda: tool_repo.set_node_status(node.id, "ready" if result.ok else "error", result.detail)
-    )
+    await to_thread.run_sync(lambda: tool_repo.set_node_status(node.id, status_, detail))
 
 
 @router.get("/tool-types", response_model=list[ToolTypeResponse])
@@ -1123,34 +1246,25 @@ async def create_edge(
     project_id: UUID,
     req: CreateEdgeRequest,
     repo: ProjectRepo,
-    tool_repo: ToolRepo,
-    env_repo: EnvRepo,
 ) -> EdgeResponse:
     """Create an edge between two nodes on the canvas."""
-
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    node_ids = [str(req.source_node_id), str(req.target_node_id)]
+    project, found = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.node_kinds, node_ids),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    # Load both endpoints, check they belong to this project, then check the
-    # kind pair this edge kind allows.
+    # Both endpoints must be in this project, then check the kind pair this
+    # edge kind allows.
     required_kinds = _EDGE_ENDPOINTS[req.kind]
-    node_ids = (req.source_node_id, req.target_node_id)
     actual_kinds: list[str] = []
     for node_id in node_ids:
-        agent_node = await to_thread.run_sync(repo.get_agent_node, str(node_id))
-        if agent_node is not None and agent_node.project_id == str(project_id):
-            actual_kinds.append("agent")
-            continue
-        tool_node = await to_thread.run_sync(tool_repo.get_tool_node, str(node_id))
-        if tool_node is not None and tool_node.project_id == str(project_id):
-            actual_kinds.append("tool")
-            continue
-        env_node = await to_thread.run_sync(env_repo.get_environment_node, str(node_id))
-        if env_node is not None and env_node.project_id == str(project_id):
-            actual_kinds.append("environment")
-            continue
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        info = found.get(node_id)
+        if info is None or info[0] != str(project_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        actual_kinds.append(info[1])
 
     if tuple(actual_kinds) != required_kinds:
         raise HTTPException(
@@ -1191,32 +1305,40 @@ async def create_edge(
 @router.get("/projects/{project_id}/edges", response_model=list[EdgeResponse])
 async def list_edges(project_id: UUID, repo: ProjectRepo) -> list[EdgeResponse]:
     """List the edges on a project's canvas."""
-    # Check the project before listing edges.
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    project, edges = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.list_edges, str(project_id)),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    edges = await to_thread.run_sync(repo.list_edges, str(project_id))
-
-    # One head lookup per context edge, cached per source node: a canvas of
-    # tool edges was paying two Supabase round trips each for a staleness
-    # number only context edges carry.
+    # Heads only for summarised context edges: one conversation lookup for all
+    # sources, then one concurrent seq read each.
+    sources = list(
+        {
+            e.source_node_id
+            for e in edges
+            if e.kind == "context" and e.summarised_through_seq is not None
+        }
+    )
     heads: dict[str, int] = {}
+    if sources:
+        conv_ids = await to_thread.run_sync(repo.conversation_ids_for_nodes, sources)
+        seqs = await asyncio.gather(
+            *(to_thread.run_sync(repo.conversation_head_seq, c) for c in conv_ids.values())
+        )
+        heads = dict(zip(conv_ids, seqs, strict=True))
+
     out = []
     for e in edges:
         if e.kind != "context":
             out.append(EdgeResponse.of(e, is_stale=False, messages_behind=None))
-            continue
-        if e.summarised_through_seq is None:
+        elif e.summarised_through_seq is None:
             # Never summarised: stale, with no meaningful gap.
             out.append(EdgeResponse.of(e, is_stale=True, messages_behind=None))
-            continue
-        if e.source_node_id not in heads:
-            heads[e.source_node_id] = await to_thread.run_sync(
-                repo.get_conversation_head, e.source_node_id
-            )
-        behind = max(0, heads[e.source_node_id] - e.summarised_through_seq)
-        out.append(EdgeResponse.of(e, is_stale=behind > 0, messages_behind=behind))
+        else:
+            behind = max(0, heads.get(e.source_node_id, 0) - e.summarised_through_seq)
+            out.append(EdgeResponse.of(e, is_stale=behind > 0, messages_behind=behind))
     return out
 
 
@@ -1238,11 +1360,12 @@ async def delete_edge(project_id: UUID, edge_id: UUID, repo: ProjectRepo) -> Non
 @router.post("/projects/{project_id}/edges/{edge_id}/refresh", response_model=EdgeResponse)
 async def refresh_edge_summary(project_id: UUID, edge_id: UUID, repo: ProjectRepo) -> EdgeResponse:
     """Regenerate a context edge's summary from its source conversation."""
-    project = await to_thread.run_sync(repo.get_project, str(project_id))
+    project, edge = await asyncio.gather(
+        to_thread.run_sync(repo.get_project, str(project_id)),
+        to_thread.run_sync(repo.get_edge, str(edge_id)),
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    edge = await to_thread.run_sync(repo.get_edge, str(edge_id))
     if edge is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Edge not found")
     if edge.kind != "context":

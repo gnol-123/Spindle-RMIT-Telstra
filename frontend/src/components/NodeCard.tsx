@@ -68,6 +68,7 @@ export default function NodeCard({
   busy,
   pendingApproval,
   deleting,
+  provisioning,
   zoom,
   onSelect,
   onDragMove,
@@ -101,6 +102,8 @@ export default function NodeCard({
   pendingApproval?: boolean;
   // Delete is in flight: card dims, x becomes a spinner.
   deleting?: boolean;
+  // Agent still being set up: dimmed, spinner, no interaction.
+  provisioning?: boolean;
   // Canvas scale; pointer deltas are divided by it.
   zoom: number;
   onSelect: () => void;
@@ -224,7 +227,7 @@ export default function NodeCard({
         selected
           ? "bg-accent/[0.045] shadow-[0_8px_20px_rgba(0,0,0,.45),0_0_16px_rgba(92,141,255,.08)]"
           : "bg-white/[0.022] shadow-[0_6px_16px_rgba(0,0,0,.35)]"
-      } ${deleting ? "opacity-45 pointer-events-none" : ""}`}
+      } ${deleting || provisioning ? "opacity-45 pointer-events-none" : ""}`}
     >
       {/* in port: agents and environments-as-sources don't receive; only agents can be an edge target */}
       {agent && (
@@ -401,18 +404,22 @@ export default function NodeCard({
           {(() => {
             // A turn in flight on this client wins over the polled backend
             // value, which today only ever reads "ready" for agents.
-            const status = working ? "running" : node.status ?? "ready";
+            const status = provisioning ? "provisioning" : working ? "running" : node.status ?? "ready";
             return (
               <>
-                <span
-                  className={`w-[5px] h-[5px] rounded-full shrink-0 ${
-                    status === "running"
-                      ? "bg-green anim-softpulse"
-                      : status === "error"
-                      ? "bg-red-400"
-                      : "bg-white/30"
-                  }`}
-                />
+                {provisioning ? (
+                  <Spinner size={10} className="shrink-0" />
+                ) : (
+                  <span
+                    className={`w-[5px] h-[5px] rounded-full shrink-0 ${
+                      status === "running"
+                        ? "bg-green anim-softpulse"
+                        : status === "error"
+                        ? "bg-red-400"
+                        : "bg-white/30"
+                    }`}
+                  />
+                )}
                 <span className="shrink-0 text-[10px] text-white/[0.42] tracking-[0.04em] uppercase whitespace-nowrap">
                   {status}
                 </span>

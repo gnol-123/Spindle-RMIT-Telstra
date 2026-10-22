@@ -2,6 +2,7 @@
 Turn configured tool nodes into toolsets for one agent run.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -124,44 +125,48 @@ class RecordingToolset(WrapperToolset):
             return None
 
 
+async def _build(node: ToolNode, spec, keys: list[str]) -> Any:
+    """One node's toolset. Raises on any secret, token or build failure."""
+    secrets = await to_thread.run_sync(lambda: load_node_secrets(node.id, keys)) if keys else {}
+    # Platform keys fill gaps; a user's own key wins.
+    secrets = {**platform_secrets(node.tool_slug), **secrets}
+    # oauth2 nodes need a live access token before build, which is sync.
+    secrets = await with_access_token(node.tool_slug, node.id, secrets)
+    return spec.build(
+        ToolContext(node_id=node.id, name=node.name, config=node.config, secrets=secrets)
+    )
+
+
 async def assemble(repo, tool_nodes: list[ToolNode], *, ask: bool) -> AssembledTools:
     toolsets: list[AbstractToolset] = []
     owner_by_tool: dict[str, str] = {}
     owner_by_toolset: list[str] = []
     unavailable: list[str] = []
 
-    for node in tool_nodes:
-        if node.status != "ready":
-            unavailable.append(node.name)
-            continue
+    specs = [get_spec(n.tool_slug) if n.status == "ready" else None for n in tool_nodes]
+    ids = [n.id for n, s in zip(tool_nodes, specs, strict=True) if s is not None]
+    keys: dict[str, list[str]] = {}
+    try:
+        if repo is not None and ids:
+            keys = await to_thread.run_sync(repo.secret_keys_for_nodes, ids)
+    except Exception:
+        # Same as a per-node secret failure: every buildable node unavailable.
+        log.exception("secret keys read failed")
+        specs = [None] * len(tool_nodes)
+    # Nodes build concurrently; results stay in input order.
+    built_all = await asyncio.gather(
+        *(
+            _build(n, s, keys.get(n.id, []))
+            for n, s in zip(tool_nodes, specs, strict=True)
+            if s is not None
+        ),
+        return_exceptions=True,
+    )
+    results = iter(built_all)
 
-        spec = get_spec(node.tool_slug)
-        if spec is None:
-            unavailable.append(node.name)
-            continue
-
-        try:
-            keys = await to_thread.run_sync(
-                lambda n=node: repo.secret_keys(n.id) if repo is not None else []
-            )
-            secrets = (
-                await to_thread.run_sync(lambda n=node, k=keys: load_node_secrets(n.id, k))
-                if keys
-                else {}
-            )
-            # Platform keys fill gaps; a user's own key wins.
-            secrets = {**platform_secrets(node.tool_slug), **secrets}
-            # oauth2 nodes need a live access token before build, which is sync.
-            secrets = await with_access_token(node.tool_slug, node.id, secrets)
-            built = spec.build(
-                ToolContext(
-                    node_id=node.id,
-                    name=node.name,
-                    config=node.config,
-                    secrets=secrets,
-                )
-            )
-        except Exception:
+    for node, spec in zip(tool_nodes, specs, strict=True):
+        built = next(results) if spec is not None else None
+        if spec is None or isinstance(built, BaseException):
             unavailable.append(node.name)
             continue
 

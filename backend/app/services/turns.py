@@ -4,6 +4,7 @@ Shared by the chat routes and by the canvas tool's nested runs, so a stage
 agent driven by an orchestrator gets exactly what it would get from a user.
 """
 
+import asyncio
 from dataclasses import dataclass
 
 from anyio import to_thread
@@ -38,46 +39,36 @@ async def prepare_turn(
 
     repo, tool_repo, env_repo = repos.project, repos.tool, repos.env
 
-    context = await to_thread.run_sync(repo.list_inbound_context, node.id)
-    instructions = build_context_instructions(context)
+    inbound = await to_thread.run_sync(repo.list_inbound, node.id)
+    instructions = build_context_instructions(inbound.context)
 
-    tools = AssembledTools()
-    tool_ids = await to_thread.run_sync(repo.list_inbound_tool_node_ids, node.id)
-    if tool_ids:
-        tool_nodes = [
-            n
-            for n in (
-                await to_thread.run_sync(lambda: [tool_repo.get_tool_node(i) for i in tool_ids])
-            )
-            if n is not None
-        ]
+    async def tools_part() -> AssembledTools:
+        tool_nodes = inbound.tool_nodes
+        if not tool_nodes:
+            return AssembledTools()
         canvas_nodes = [n for n in tool_nodes if n.tool_slug == CANVAS_SLUG]
         other_nodes = [n for n in tool_nodes if n.tool_slug != CANVAS_SLUG]
         ask = node.tool_policy == "ask"
         tools = await assemble(tool_repo, other_nodes, ask=ask)
         if canvas_nodes and nested:
-            tools = merge_assembled(
+            return merge_assembled(
                 tools, AssembledTools(unavailable=[n.name for n in canvas_nodes])
             )
-        elif canvas_nodes:
-            tools = merge_assembled(
+        if canvas_nodes:
+            return merge_assembled(
                 tools, await assemble_canvas(repos, node, canvas_nodes, conversation_id, ask=ask)
             )
+        return tools
 
-    env_ids = await to_thread.run_sync(repo.list_inbound_environment_node_ids, node.id)
-    if env_ids:
-        env_nodes = [
-            n
-            for n in (
-                await to_thread.run_sync(
-                    lambda: [env_repo.get_environment_node(i) for i in env_ids]
-                )
-            )
-            if n is not None
-        ]
-        envs = await assemble_environments(
-            env_repo, env_nodes, agent_node_id=node.id, preview_repo=repos.preview
+    async def envs_part() -> AssembledTools | None:
+        if not inbound.env_nodes:
+            return None
+        return await assemble_environments(
+            env_repo, inbound.env_nodes, agent_node_id=node.id, preview_repo=repos.preview
         )
+
+    tools, envs = await asyncio.gather(tools_part(), envs_part())
+    if envs is not None:
         tools = merge_assembled(tools, envs)
 
     parts = [instructions, *tools.notes, unavailable_note(tools.unavailable)]

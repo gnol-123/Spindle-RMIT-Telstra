@@ -355,7 +355,7 @@ class CanvasTools:
     async def _run(self, target: Node, prompt: str, *, refresh: bool = True) -> str:
         """Run one turn on target and return its reply. Shared by run_agent and evaluate."""
         repo, tool_repo = self._repos.project, self._repos.tool
-        conversation_id = await to_thread.run_sync(
+        conversation_id = target.conversation_id or await to_thread.run_sync(
             lambda: repo.get_or_create_conversation(target.id, target.project_id)
         )
         if await to_thread.run_sync(tool_repo.get_pending_run, conversation_id):

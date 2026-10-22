@@ -22,7 +22,13 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import UsageLimits
 
 from app.config import settings
-from app.repositories.project_repo import Edge, InboundContext, Message, ProjectRepository
+from app.repositories.project_repo import (
+    DEFAULT_HISTORY_LIMIT,
+    Edge,
+    InboundContext,
+    Message,
+    ProjectRepository,
+)
 from app.services import runs
 from app.services.agent import get_agent_for, summarise_conversation, to_model_messages
 from app.services.runs import RunningTurn
@@ -460,7 +466,7 @@ def _turn_from_result(result, model: str) -> AgentTurn:
 
 @dataclass(frozen=True)
 class TurnSetup:
-    """What a turn's ``setup`` hands back: built inside the task, so it is cancellable."""
+    """What a turn's ``setup`` hands back: awaited inside the task, so it is cancellable."""
 
     instructions: str | None
     toolsets: list
@@ -688,6 +694,15 @@ async def _shielded(coro):
     return await asyncio.shield(task)
 
 
+def _drop(task: asyncio.Task) -> None:
+    """Cancel a task nobody will await, retrieving any error it already raised."""
+    if task.done():
+        if not task.cancelled():
+            task.exception()
+    else:
+        task.cancel()
+
+
 async def start_turn(
     repo: ProjectRepository,
     conversation_id: str,
@@ -713,8 +728,9 @@ async def start_turn(
     Detached: the model run and every write live in ``run.task``, which outlives
     any reader. Readers attach through ``attach_events``.
 
-    ``setup``, when given, replaces instructions/toolsets/on_paused and runs
-    inside the task: the rows exist and cancel works while tools are built.
+    ``setup``, when given, replaces instructions/toolsets/on_paused. It starts
+    once the turn is registered, beside the row writes, and is awaited inside
+    the task: cancel works while tools are built. A failed write cancels it.
     """
     from anyio import to_thread
 
@@ -722,35 +738,53 @@ async def start_turn(
         conversation_id=conversation_id, node_id=node_id, project_id=project_id, model=model
     )
     runs.register(run)
+    setup_task = asyncio.ensure_future(setup()) if setup is not None else None
     try:
         if resume is None:
-            history = await to_thread.run_sync(repo.list_messages, conversation_id)
-            run.user_message = await to_thread.run_sync(
-                lambda: repo.add_message(
-                    conversation_id,
-                    "user",
-                    prompt,
-                    client_token=client_token,
-                    sender_node_id=sender_node_id,
-                )
+            # One spare row: the read may land after the insert.
+            listed, user_message = await asyncio.gather(
+                to_thread.run_sync(
+                    lambda: repo.list_messages(conversation_id, limit=DEFAULT_HISTORY_LIMIT + 1)
+                ),
+                to_thread.run_sync(
+                    lambda: repo.add_message(
+                        conversation_id,
+                        "user",
+                        prompt,
+                        client_token=client_token,
+                        sender_node_id=sender_node_id,
+                    )
+                ),
             )
-            run.message = await to_thread.run_sync(
-                lambda: repo.add_message(
-                    conversation_id, "assistant", "", status="running", heartbeat_at=_now_iso()
-                )
+            # Replayed token inserted nothing, so the read is already pre-insert.
+            if not user_message.replayed:
+                listed = [m for m in listed if m.seq < user_message.seq]
+            history = listed[-DEFAULT_HISTORY_LIMIT:]
+            run.user_message = user_message
+            run.message, _ = await asyncio.gather(
+                to_thread.run_sync(
+                    lambda: repo.add_message(
+                        conversation_id, "assistant", "", status="running", heartbeat_at=_now_iso()
+                    )
+                ),
+                _set_node_status(repo, node_id, "running"),
             )
         else:
             history = []
             run.text.append(resume.message.content)
             run.events.extend(resume.message.tool_calls)
-            run.message = await to_thread.run_sync(
-                lambda: repo.update_message(
-                    resume.message.id, status="running", heartbeat_at=_now_iso()
-                )
+            run.message, _ = await asyncio.gather(
+                to_thread.run_sync(
+                    lambda: repo.update_message(
+                        resume.message.id, status="running", heartbeat_at=_now_iso()
+                    )
+                ),
+                _set_node_status(repo, node_id, "running"),
             )
-        await _set_node_status(repo, node_id, "running")
     except BaseException:
         runs.unregister(conversation_id)
+        if setup_task is not None:
+            _drop(setup_task)
         raise
 
     flusher = _Flusher(repo, run)
@@ -784,8 +818,8 @@ async def start_turn(
 
         turn: AgentTurn | None = None
         try:
-            if setup is not None:
-                built = await setup()
+            if setup_task is not None:
+                built = await setup_task
                 instructions, toolsets, on_paused = (
                     built.instructions,
                     built.toolsets,
@@ -912,10 +946,15 @@ async def start_turn(
                 await _finalise(repo, tool_repo, run, status="failed", error="turn failed")
             await _set_node_status(repo, node_id, "ready")
         finally:
+            # A cancel before drive awaited setup_task leaves it running.
+            if setup_task is not None:
+                _drop(setup_task)
             # Safety net; every finalise path stopped it already.
             await _shielded(heartbeat.stop())
 
     run.task = asyncio.ensure_future(guarded())
+    # Step it to its first await: a task cancelled before it starts skips every handler.
+    await asyncio.sleep(0)
     return run
 
 

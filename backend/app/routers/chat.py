@@ -126,9 +126,11 @@ def _record_pending_calls(
     Skips a tool with no ``owner_by_tool`` entry rather than guessing
     tool_node_id: endpoints filter on it, so a wrong row beats no row.
     """
+    existing = tool_repo.get_calls_by_tool_call_ids(
+        conversation_id, [p.tool_call_id for p in pending.approvals]
+    )
     for part in pending.approvals:
-        existing = tool_repo.get_call_by_tool_call_id(conversation_id, part.tool_call_id)
-        if existing is not None:
+        if part.tool_call_id in existing:
             continue
         tool_node_id = owner_by_tool.get(part.tool_name)
         if tool_node_id is None:
@@ -181,7 +183,7 @@ def _make_on_paused(
 
 
 def _setup(turn_repos, node, conversation_id: str):
-    """Build tools inside the turn's task: slow, and must not delay the rows or block cancel."""
+    """Build tools beside the row writes; start_turn awaits it in the task so cancel still works."""
 
     async def setup() -> TurnSetup:
         prepared = await prepare_turn(turn_repos, node, conversation_id)
@@ -229,7 +231,7 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     trepo, tool_repo = turn_repos.project, turn_repos.tool
-    conversation_id = await to_thread.run_sync(
+    conversation_id = node.conversation_id or await to_thread.run_sync(
         lambda: trepo.get_or_create_conversation(node.id, node.project_id)
     )
 
@@ -289,7 +291,7 @@ async def chat_stream(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     trepo, tool_repo = turn_repos.project, turn_repos.tool
-    conversation_id = await to_thread.run_sync(
+    conversation_id = node.conversation_id or await to_thread.run_sync(
         lambda: trepo.get_or_create_conversation(node.id, node.project_id)
     )
 
@@ -324,7 +326,9 @@ async def chat_attach(node_id: UUID, repo: ProjectRepo) -> Response:
     node = await to_thread.run_sync(repo.get_agent_node, str(node_id))
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    conversation_id = await to_thread.run_sync(repo.get_conversation_for_node, node.id)
+    conversation_id = node.conversation_id or await to_thread.run_sync(
+        repo.get_conversation_for_node, node.id
+    )
     run = runs.get(conversation_id) if conversation_id else None
     # message is None between register() and the first DB insert: nothing to
     # snapshot yet, so treat it the same as no run.
@@ -351,7 +355,9 @@ async def chat_cancel(
     node = await to_thread.run_sync(repo.get_agent_node, str(req.node_id))
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    conversation_id = await to_thread.run_sync(repo.get_conversation_for_node, node.id)
+    conversation_id = node.conversation_id or await to_thread.run_sync(
+        repo.get_conversation_for_node, node.id
+    )
     if conversation_id is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing running")
     run = runs.get(conversation_id)
@@ -397,7 +403,9 @@ async def chat_resume(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     trepo, tool_repo = turn_repos.project, turn_repos.tool
-    conversation_id = await to_thread.run_sync(trepo.get_conversation_for_node, node.id)
+    conversation_id = node.conversation_id or await to_thread.run_sync(
+        trepo.get_conversation_for_node, node.id
+    )
     if conversation_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
@@ -417,10 +425,11 @@ async def chat_resume(
             )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pending approval expired")
 
+    calls = await to_thread.run_sync(
+        lambda: tool_repo.get_calls_by_tool_call_ids(conversation_id, list(req.approvals))
+    )
     for tool_call_id in req.approvals:
-        existing = await to_thread.run_sync(
-            lambda tid=tool_call_id: tool_repo.get_call_by_tool_call_id(conversation_id, tid)
-        )
+        existing = calls.get(tool_call_id)
         if existing is None or existing.get("status") != "pending_approval":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -486,7 +495,5 @@ def _apply_approval_decisions(
     tool_repo: ToolRepo, conversation_id: str, approvals: dict[str, bool]
 ) -> None:
     """Mark denied rows. Approved ones already moved to ok or error during the run."""
-    for tool_call_id, approved in approvals.items():
-        if approved:
-            continue
-        tool_repo.finish_call_by_tool_call_id(conversation_id, tool_call_id, status="denied")
+    denied = [tid for tid, approved in approvals.items() if not approved]
+    tool_repo.set_calls_status(conversation_id, denied, "denied")
