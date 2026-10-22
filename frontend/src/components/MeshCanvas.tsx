@@ -46,6 +46,7 @@ import WorkspaceSheet, { SheetOpenRequest } from "./workspace/WorkspaceSheet";
 import { BrandLockup, BrandMark, Spinner } from "./Brand";
 import RunProgress from "./RunProgress";
 import { tidyLayout } from "@/lib/layout";
+import { agentProvisioned, TEMP_PREFIX, PROVISION_TIMEOUT_MS, PROVISION_POLL_MS } from "@/lib/provision";
 
 const SNAP_MAX_W = 1600;
 const SNAP_TIMEOUT_MS = 1500;
@@ -169,6 +170,13 @@ export default function MeshCanvas({
   const mutationSeq = useRef(0);
   // Nodes with a delete in flight. Spinner until the row actually goes.
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  // Agents still being set up (temp id, then real id): locked with a spinner.
+  const [provisioningIds, setProvisioningIds] = useState<Set<string>>(new Set());
+  // Sync fast while a real agent provisions: realtime lags 1.5 to 3s behind writes.
+  const provisioningRef = useRef(false);
+  provisioningRef.current = [...provisioningIds].some((id) => !id.startsWith(TEMP_PREFIX));
+  // Reschedules the sync timer; set by the sync effect.
+  const rescheduleSyncRef = useRef<() => void>(() => {});
   // Live position of the node being dragged, null when nothing is.
   const [dragPos, setDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
   // Same fact as dragPos, as a ref the poll's closure can read live.
@@ -180,7 +188,8 @@ export default function MeshCanvas({
   async function reloadCanvas() {
     try {
       const [ns, es] = await Promise.all([listNodes(project.id), listEdges(project.id)]);
-      setNodes(dedupeById(ns));
+      // Temp cards aren't on the server yet: keep them.
+      setNodes((prev) => [...dedupeById(ns), ...prev.filter((n) => n.id.startsWith(TEMP_PREFIX))]);
       setEdges(dedupeById(es));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not refresh the canvas");
@@ -209,6 +218,37 @@ export default function MeshCanvas({
       return next;
     });
   }
+
+  function markProvisioning(id: string, on: boolean) {
+    setProvisioningIds((prev) => {
+      if (prev.has(id) === on) return prev;
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  // Unlock a real agent once its default tools are attached and settled.
+  useEffect(() => {
+    const done: { id: string; name: string; n: number }[] = [];
+    for (const id of provisioningIds) {
+      if (id.startsWith(TEMP_PREFIX)) continue;
+      const a = nodes.find((x) => x.id === id);
+      if (!a || !isAgentNode(a)) continue;
+      const n = agentTypes.find((t) => t.slug === a.agent_slug)?.default_presets?.length ?? 0;
+      if (agentProvisioned(id, nodes, edges, n)) done.push({ id, name: a.name, n });
+    }
+    if (done.length === 0) return;
+    setProvisioningIds((prev) => {
+      const next = new Set(prev);
+      for (const d of done) next.delete(d.id);
+      return next;
+    });
+    for (const d of done) {
+      if (d.n > 0) setNotice(`${d.name} came equipped with ${d.n} default tool${d.n === 1 ? "" : "s"}: see the chips on its card.`);
+    }
+  }, [provisioningIds, nodes, edges, agentTypes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -289,6 +329,7 @@ export default function MeshCanvas({
             const merged = prev.flatMap((n) => {
               const f = byId.get(n.id);
               if (!f) {
+                if (n.id.startsWith(TEMP_PREFIX)) return [n];
                 if (!settled || fresh.length === 0) return [n];
                 changed = true;
                 return [];
@@ -341,9 +382,10 @@ export default function MeshCanvas({
       timer = setTimeout(() => {
         sync();
         schedule();
-      }, live && !dirty ? 30_000 : 2_000);
+      }, provisioningRef.current ? PROVISION_POLL_MS : live && !dirty ? 30_000 : 2_000);
     };
     schedule();
+    rescheduleSyncRef.current = schedule;
     const kick = coalesce(sync, CANVAS_DEBOUNCE_MS);
     const stop = subscribeCanvas(
       project.id,
@@ -361,6 +403,7 @@ export default function MeshCanvas({
     );
     return () => {
       disposed = true;
+      rescheduleSyncRef.current = () => {};
       stop();
       kick.cancel();
       clearTimeout(timer);
@@ -480,31 +523,40 @@ export default function MeshCanvas({
   }
 
   async function handleAddAgent(agentSlug: string, pos?: { x: number; y: number }) {
+    const offset = nodes.length * 40;
+    const position_x = pos?.x ?? 120 + offset;
+    const position_y = pos?.y ?? 100 + offset;
+    // Card appears at once, locked until the POST and default tools land.
+    const tempId = `${TEMP_PREFIX}${crypto.randomUUID()}`;
+    const temp: ProjectNode = {
+      kind: "agent",
+      id: tempId,
+      project_id: project.id,
+      name: agentTypes.find((t) => t.slug === agentSlug)?.name ?? agentSlug,
+      agent_slug: agentSlug,
+      tool_policy: "ask",
+      status: "provisioning",
+      position_x,
+      position_y,
+    };
+    setNodes((n) => [...n, temp]);
+    markProvisioning(tempId, true);
     try {
-      const offset = nodes.length * 40;
-      const node = await mutating(() =>
-        createAgentNode(project.id, agentSlug, {
-          position_x: pos?.x ?? 120 + offset,
-          position_y: pos?.y ?? 100 + offset,
-        })
-      );
-      setNodes((n) => dedupeById([...n, node]));
+      const node = await mutating(() => createAgentNode(project.id, agentSlug, { position_x, position_y }));
+      // Real node takes the temp's place; dedupe in case a sync already added it.
+      setNodes((n) => dedupeById([...n.filter((x) => x.id !== tempId), node]));
+      markProvisioning(node.id, true);
+      markProvisioning(tempId, false);
+      // Ref ahead of the render, so the reschedule picks the fast cadence.
+      provisioningRef.current = true;
+      rescheduleSyncRef.current();
       setSelectedId(node.id);
-
-      // "kind='agent' now provisions the agent type's default_presets": one
-      // tool node + tool edge per preset, created server-side alongside the
-      // agent. The response above is still just the agent's own node, so
-      // reload to pick up whatever else the backend just created.
-      const agentType = agentTypes.find((t) => t.slug === agentSlug);
+      setTimeout(() => markProvisioning(node.id, false), PROVISION_TIMEOUT_MS);
+      // The response is just the agent; pick up the default tool nodes + edges.
       await reloadCanvas();
-      if (agentType?.default_presets && agentType.default_presets.length > 0) {
-        setNotice(
-          `${agentType.name} came equipped with ${agentType.default_presets.length} default tool${
-            agentType.default_presets.length === 1 ? "" : "s"
-          } — see the chips on its card.`
-        );
-      }
     } catch (e) {
+      setNodes((n) => n.filter((x) => x.id !== tempId));
+      markProvisioning(tempId, false);
       setError(e instanceof ApiError ? e.message : "Could not add agent");
     }
   }
@@ -596,6 +648,7 @@ export default function MeshCanvas({
   // types still collect config through the modal; presets (which already
   // carry their config) attach immediately, no modal, matching the design.
   function handleDropOnAgent(agent: ProjectNode, raw: string) {
+    if (provisioningIds.has(agent.id)) return;
     const [dragKind, slug] = raw.split(":");
     if (dragKind === "tool") {
       openToolConfig(slug, posNearAgent(agent), agent.id);
@@ -631,6 +684,7 @@ export default function MeshCanvas({
   }
 
   async function handleDragEnd(node: ProjectNode, x: number, y: number) {
+    if (provisioningIds.has(node.id)) return;
     draggingRef.current = false;
     setDragPos(null);
     setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, position_x: x, position_y: y } : n)));
@@ -642,7 +696,7 @@ export default function MeshCanvas({
   }
 
   async function handleDeleteNode(node: ProjectNode) {
-    if (deletingIds.has(node.id)) return;
+    if (deletingIds.has(node.id) || provisioningIds.has(node.id)) return;
     markDeleting(node.id, true);
     try {
       const { deleted_node_ids } = await mutating(() => deleteNode(project.id, node.id));
@@ -660,6 +714,7 @@ export default function MeshCanvas({
   }
 
   function handlePortDown(node: ProjectNode, side: "in" | "out") {
+    if (provisioningIds.has(node.id)) return;
     setLink({ fromId: node.id, side, cursor: portOf(node, side) });
   }
 
@@ -855,6 +910,7 @@ export default function MeshCanvas({
 
   const chatNode = nodes.find((n) => n.id === chatNodeId);
   const openChat = (id: string) => {
+    if (provisioningIds.has(id)) return;
     setSelectedId(id);
     setChatNodeId(id);
   };
@@ -1065,6 +1121,7 @@ export default function MeshCanvas({
                   busy={!!chatByNode[node.id]?.busy}
                   pendingApproval={!!chatByNode[node.id]?.pendingCalls?.length}
                   deleting={deletingIds.has(node.id)}
+                  provisioning={provisioningIds.has(node.id)}
                   zoom={zoom}
                   attachedEnvironments={isAgentNode(node) ? attachedEnvsByAgent.get(node.id) ?? [] : undefined}
                   onSelect={() => setSelectedId(node.id)}
@@ -1107,6 +1164,7 @@ export default function MeshCanvas({
           edges={edges}
           toolTypes={toolTypes}
           chatBusy={!!(selectedNode && chatByNode[selectedNode.id]?.busy)}
+          locked={!!selectedNode && provisioningIds.has(selectedNode.id)}
           refreshingEdgeId={refreshingEdgeId}
           onOpenChat={openChat}
           onUpdateAgentPolicy={handleUpdateAgentPolicy}

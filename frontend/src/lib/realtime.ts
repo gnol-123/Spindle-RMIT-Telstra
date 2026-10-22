@@ -75,17 +75,31 @@ export function subscribeCanvas(
     channel.on("postgres_changes", { event: "DELETE", schema: "public", table }, handle);
   }
 
-  channel.subscribe((status, err) => {
-    if (stopped) return;
-    if (status === "SUBSCRIBED") onLive(true);
-    else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-      if (status === "CHANNEL_ERROR" && !warned) {
+  // join must carry the user token, or RLS drops every insert/update as anon
+  client
+    .setAuth()
+    .then(() => {
+      if (stopped) return;
+      channel.subscribe((status, err) => {
+        if (stopped) return;
+        if (status === "SUBSCRIBED") onLive(true);
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          if (status === "CHANNEL_ERROR" && !warned) {
+            warned = true;
+            console.warn("realtime:", err);
+          }
+          onLive(false);
+        }
+      });
+    })
+    .catch((err) => {
+      if (stopped) return;
+      if (!warned) {
         warned = true;
-        console.warn("realtime:", err);
+        console.warn("realtime: auth failed", err);
       }
       onLive(false);
-    }
-  });
+    });
 
   return () => {
     stopped = true;

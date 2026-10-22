@@ -34,6 +34,7 @@ export default function Inspector({
   edges,
   toolTypes,
   chatBusy,
+  locked,
   refreshingEdgeId,
   onOpenChat,
   onUpdateAgentPolicy,
@@ -54,6 +55,8 @@ export default function Inspector({
   toolTypes: ToolType[];
   // A chat turn is in flight for the selected agent (see ChatWindow).
   chatBusy: boolean;
+  // Selected agent is still provisioning: inspector is read-only.
+  locked?: boolean;
   refreshingEdgeId: string | null;
   onOpenChat: (nodeId: string) => void;
   onUpdateAgentPolicy: (nodeId: string, policy: ToolPolicy) => void;
@@ -104,6 +107,7 @@ export default function Inspector({
           with it.
         </div>
       ) : isAgentNode(node) ? (
+        <div inert={locked} className={locked ? "flex-1 min-h-0 flex flex-col opacity-45 pointer-events-none" : "contents"}>
         <AgentInspector
           key={node.id}
           node={node}
@@ -119,6 +123,7 @@ export default function Inspector({
           onUnequipTool={onUnequipTool}
           onOpenWorkspace={onOpenWorkspace}
         />
+        </div>
       ) : isEnvironmentNode(node) ? (
         <EnvironmentInspector
           key={node.id}
