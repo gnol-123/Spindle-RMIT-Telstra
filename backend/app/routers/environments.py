@@ -651,8 +651,11 @@ async def list_environment_previews(
     Mirrors /ports but merges in the agent-published registry, so a preview
     an agent named shows its title instead of just a bare port.
     """
-    node = await _load_ready(project_id, node_id, env_repo)
-    stored = await to_thread.run_sync(preview_repo.list_for_env, str(node_id))
+    # Independent DB round trips, run together.
+    node, stored = await asyncio.gather(
+        _load_ready(project_id, node_id, env_repo),
+        to_thread.run_sync(preview_repo.list_for_env, str(node_id)),
+    )
     # Oldest to newest, as merge_previews expects.
     db_registry = [
         {
@@ -666,16 +669,16 @@ async def list_environment_previews(
     ]
 
     async def scan(sandbox: AsyncSandbox) -> list[dict[str, Any]]:
-        # Sandbox file is the pre-database registry, read only when the table is empty.
-        registry = db_registry or await workspace.read_registry(sandbox)
-        # Live means answers HTTP, not just listening (ssh, rpcbind).
-        listening = await workspace.web_ports(sandbox, await workspace.listening_ports(sandbox))
+        async def registry() -> list[dict[str, Any]]:
+            # Sandbox file is the pre-database registry, read only when the table is empty.
+            return db_registry or await workspace.read_registry(sandbox)
+
+        # Live means answers HTTP, not just listening (ssh, rpcbind). Html names
+        # keep folder servers without index.html off a directory listing.
+        (listening, html), reg = await asyncio.gather(workspace.scan_previews(sandbox), registry())
         rows = workspace.merge_previews(
-            registry, listening, lambda port: f"https://{sandbox.get_host(port)}"
+            reg, listening, lambda port: f"https://{sandbox.get_host(port)}"
         )
-        # Folder servers without index.html would show a directory listing.
-        folders = {d for p in listening if (d := workspace.folder_server_dir(p))}
-        html = await workspace.folder_html_files(sandbox, sorted(folders))
         return workspace.fix_folder_paths(rows, listening, html)
 
     try:

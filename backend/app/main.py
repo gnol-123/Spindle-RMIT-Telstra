@@ -7,6 +7,7 @@ from app.config import settings
 from app.routers import auth, chat, environments, health, oauth, projects
 from app.services.dbos_app import setup_dbos
 from app.services.runs import join_detached
+from app.tools.mcp.base import close_pool
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ async def _join_detached_turns() -> None:
 
 
 app.add_event_handler("shutdown", _join_detached_turns)
+# After turns join, so no run loses its session mid-call.
+app.add_event_handler("shutdown", close_pool)
 
 
 async def _sweep_stale_turns() -> None:

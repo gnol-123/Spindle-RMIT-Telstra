@@ -7,7 +7,7 @@ The Supabase client is synchronous, so async callers must dispatch these
 through ``anyio.to_thread.run_sync``.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +15,8 @@ from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.repositories.catalog_cache import cached
+from app.repositories.environment_repo import EnvNode, _to_env_node
+from app.repositories.tool_repo import ToolNode, _to_tool_node
 
 # Postgres unique_violation, surfaced by PostgREST as `code`.
 _UNIQUE_VIOLATION = "23505"
@@ -51,6 +53,8 @@ class Project:
     name: str
     # Set when the frontend has uploaded a canvas screenshot.
     canvas_snapshot_at: str | None = None
+    # Newest preview thumbnail path under the project's own folder.
+    thumbnail_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,8 @@ class Node:
     config: dict[str, Any] = field(default_factory=dict)
     # Per agent type model request cap. None = settings.turn_request_limit.
     request_limit: int | None = None
+    # Embedded by get_agent_node only. None = not selected or not created yet.
+    conversation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,22 @@ class InboundContext:
     source_node_id: str
     source_node_name: str
     summary: str
+
+
+@dataclass(frozen=True)
+class Inbound:
+    """Everything wired into an agent, from one edges read."""
+
+    context: list[InboundContext]
+    tool_nodes: list[ToolNode]
+    env_nodes: list[EnvNode]
+
+
+_INBOUND_COLUMNS = (
+    "kind, summary, source_node_id, nodes!edges_source_node_id_fkey("
+    "id, project_id, name, kind, owner_id, tool_type_id, config, status, status_detail,"
+    " tool_policy, position_x, position_y, tool_types(slug))"
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +123,8 @@ class Message:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     # Agent node that wrote this user row (canvas run_agent). None = the user.
     sender_node_id: str | None = None
+    # add_message returned an existing client_token row; nothing was inserted.
+    replayed: bool = False
 
 
 _MESSAGE_COLUMNS = "id, role, content, seq, status, created_at, tool_calls, sender_node_id"
@@ -253,36 +277,32 @@ class ProjectRepository:
         return Project(id=rows[0]["id"], name=rows[0]["name"])
 
     def list_projects(self) -> list[Project]:
+        """Projects with their newest preview thumbnail, one query."""
         rows = (
             self._db.table("projects")
-            .select("id, name, canvas_snapshot_at")
+            .select("id, name, canvas_snapshot_at, previews(thumbnail_path, created_at)")
             .eq("owner_id", self._user_id)
             .is_("archived_at", "null")
+            .not_.is_("previews.thumbnail_path", "null")
             .order("created_at", desc=True)
+            .order("created_at", desc=True, foreign_table="previews")
+            .limit(1, foreign_table="previews")
             .execute()
         ).data
-        return [
-            Project(id=r["id"], name=r["name"], canvas_snapshot_at=r.get("canvas_snapshot_at"))
-            for r in rows
-        ]
-
-    def latest_thumbnails(self, project_ids: list[str]) -> dict[str, str]:
-        """project_id -> newest thumbnail_path, one query."""
-        if not project_ids:
-            return {}
-        rows = (
-            self._db.table("previews")
-            .select("project_id, thumbnail_path")
-            .in_("project_id", project_ids)
-            .not_.is_("thumbnail_path", "null")
-            .order("created_at", desc=True)
-            .execute()
-        ).data
-        out: dict[str, str] = {}
+        out = []
         for r in rows:
+            thumb = next((v["thumbnail_path"] for v in r.get("previews") or []), None)
             # Column is user-writable: only paths under the project's own folder.
-            if r["thumbnail_path"].startswith(f"{r['project_id']}/"):
-                out.setdefault(r["project_id"], r["thumbnail_path"])
+            if thumb is not None and not thumb.startswith(f"{r['id']}/"):
+                thumb = None
+            out.append(
+                Project(
+                    id=r["id"],
+                    name=r["name"],
+                    canvas_snapshot_at=r.get("canvas_snapshot_at"),
+                    thumbnail_path=thumb,
+                )
+            )
         return out
 
     def get_project(self, project_id: str) -> Project | None:
@@ -347,11 +367,13 @@ class ProjectRepository:
         position_x: float = 0,
         position_y: float = 0,
         tool_policy: str = "ask",
+        with_conversation: bool = True,
     ) -> str:
         """Provision an agent box and give it a conversation.
 
         The conversation is created here rather than lazily on first message,
-        so a freshly dropped box is immediately chattable.
+        so a freshly dropped box is immediately chattable. with_conversation=False
+        leaves it to the caller (create_conversation), to overlap other writes.
         """
         rows = (
             self._db.table("nodes")
@@ -373,7 +395,8 @@ class ProjectRepository:
             .execute()
         ).data
         node_id = rows[0]["id"]
-        self._create_conversation(node_id, project_id)
+        if with_conversation:
+            self.create_conversation(node_id, project_id)
         return node_id
 
     def update_node(self, node_id: str, changes: dict[str, Any]) -> Node | None:
@@ -497,7 +520,7 @@ class ProjectRepository:
             .select(
                 "id, project_id, name, agent_type_id, tool_policy,"
                 " position_x, position_y, model,"
-                " agent_types(slug, system_prompt, model, request_limit)"
+                " agent_types(slug, system_prompt, model, request_limit), conversations(id)"
             )
             .eq("id", node_id)
             .eq("owner_id", self._user_id)
@@ -535,6 +558,42 @@ class ProjectRepository:
                 raise DuplicateEdge(f"{source_node_id} -> {target_node_id} ({kind})") from exc
             raise
         return _to_edge(rows[0])
+
+    def create_edges(self, edges: list[tuple[str, str, str]]) -> list[Edge]:
+        """Connect many (source, target, kind) pairs in one request. All or nothing."""
+        try:
+            rows = (
+                self._db.table("edges")
+                .insert(
+                    [
+                        {
+                            "owner_id": self._user_id,
+                            "source_node_id": src,
+                            "target_node_id": tgt,
+                            "kind": kind,
+                        }
+                        for src, tgt, kind in edges
+                    ]
+                )
+                .execute()
+                .data
+            )
+        except APIError as exc:
+            if exc.code == _UNIQUE_VIOLATION:
+                raise DuplicateEdge(f"{len(edges)} edges") from exc
+            raise
+        return [_to_edge(r) for r in rows]
+
+    def node_kinds(self, node_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """node id -> (project_id, kind) for any kind, one query. Missing ids dropped."""
+        rows = (
+            self._db.table("nodes")
+            .select("id, project_id, kind")
+            .in_("id", node_ids)
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        return {r["id"]: (r["project_id"], r["kind"]) for r in rows}
 
     def list_edges(self, project_id: str) -> list[Edge]:
         """Every edge on a project's canvas."""
@@ -627,6 +686,37 @@ class ProjectRepository:
             )
         return out
 
+    def list_inbound(self, node_id: str) -> Inbound:
+        """list_inbound_context plus inbound tool and environment nodes, one query."""
+        rows = (
+            self._db.table("edges")
+            .select(_INBOUND_COLUMNS)
+            .eq("target_node_id", node_id)
+            .in_("kind", ["context", "tool", "environment"])
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        out = Inbound([], [], [])
+        for r in rows:
+            node = r.get("nodes") or {}
+            if r["kind"] == "context":
+                summary = (r.get("summary") or "").strip()
+                if summary:
+                    out.context.append(
+                        InboundContext(
+                            source_node_id=r["source_node_id"],
+                            source_node_name=node.get("name", "another agent"),
+                            summary=summary,
+                        )
+                    )
+            elif node.get("owner_id") != self._user_id or node.get("kind") != r["kind"]:
+                continue
+            elif r["kind"] == "tool":
+                out.tool_nodes.append(_to_tool_node(node))
+            else:
+                out.env_nodes.append(_to_env_node(node))
+        return out
+
     def list_inbound_tool_node_ids(self, node_id: str) -> list[str]:
         """Tool nodes whose arrows point at this agent."""
         rows = (
@@ -672,6 +762,17 @@ class ProjectRepository:
         ).data
         return rows[0]["id"] if rows else None
 
+    def conversation_ids_for_nodes(self, node_ids: list[str]) -> dict[str, str]:
+        """node id -> conversation id, one query. Nodes without one are dropped."""
+        rows = (
+            self._db.table("conversations")
+            .select("id, node_id")
+            .in_("node_id", node_ids)
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        return {r["node_id"]: r["id"] for r in rows}
+
     def get_or_create_conversation(self, node_id: str, project_id: str) -> str:
         """Return the node's conversation, creating it if it is somehow absent.
 
@@ -681,9 +782,9 @@ class ProjectRepository:
         existing = self.get_conversation_for_node(node_id)
         if existing is not None:
             return existing
-        return self._create_conversation(node_id, project_id)
+        return self.create_conversation(node_id, project_id)
 
-    def _create_conversation(self, node_id: str, project_id: str) -> str:
+    def create_conversation(self, node_id: str, project_id: str) -> str:
         try:
             rows = (
                 self._db.table("conversations")
@@ -795,7 +896,7 @@ class ProjectRepository:
             if exc.code == _UNIQUE_VIOLATION and client_token is not None:
                 existing = self._find_by_client_token(conversation_id, client_token)
                 if existing is not None:
-                    return existing
+                    return replace(existing, replayed=True)
             raise
 
         return _to_message(rows[0])
@@ -871,21 +972,16 @@ class ProjectRepository:
         cancelled or running tail would otherwise read as permanently stale.
         Not conversations.message_count, which counts every row.
         """
-        rows = (
-            self._db.table("conversations")
-            .select("id")
-            .eq("owner_id", self._user_id)
-            .eq("node_id", node_id)
-            .limit(1)
-            .execute()
-        ).data
-        if not rows:
-            return 0
+        conversation_id = self.get_conversation_for_node(node_id)
+        return self.conversation_head_seq(conversation_id) if conversation_id else 0
+
+    def conversation_head_seq(self, conversation_id: str) -> int:
+        """Last complete seq in one conversation. 0 when there is none."""
         seqs = (
             self._db.table("messages")
             .select("seq")
             .eq("owner_id", self._user_id)
-            .eq("conversation_id", rows[0]["id"])
+            .eq("conversation_id", conversation_id)
             .eq("status", "complete")
             .order("seq", desc=True)
             .limit(1)
@@ -960,6 +1056,10 @@ class ProjectRepository:
 def _to_node(row: dict[str, Any]) -> Node:
     """Flatten a node row joined to its agent_types template."""
     template = row.get("agent_types") or {}
+    # One-to-one embed: an object, or a one-element list.
+    conv = row.get("conversations") or {}
+    if isinstance(conv, list):
+        conv = conv[0] if conv else {}
     return Node(
         id=row["id"],
         project_id=row["project_id"],
@@ -977,4 +1077,5 @@ def _to_node(row: dict[str, Any]) -> Node:
         status_detail=row.get("status_detail"),
         config=row.get("config") or {},
         request_limit=template.get("request_limit"),
+        conversation_id=conv.get("id"),
     )

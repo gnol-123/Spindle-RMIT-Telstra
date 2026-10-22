@@ -1,9 +1,15 @@
 """Authentication endpoints backed by Supabase Auth."""
 
+import base64
+import hashlib
+import json
 import logging
+import threading
+import time
 from functools import lru_cache
 from typing import Annotated
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from httpx import RemoteProtocolError
@@ -70,6 +76,62 @@ def _to_user_response(user) -> UserResponse:
     )
 
 
+_TOKEN_TTL = 60.0
+_TOKEN_CACHE_MAX = 10_000
+# token sha256 -> (expires_at monotonic, user)
+_token_cache: dict[str, tuple[float, UserResponse]] = {}
+_token_lock = threading.Lock()
+
+
+def _clear_token_cache() -> None:
+    with _token_lock:
+        _token_cache.clear()
+
+
+def _cache_get(key: str) -> UserResponse | None:
+    with _token_lock:
+        hit = _token_cache.get(key)
+        if hit is None:
+            return None
+        if hit[0] <= time.monotonic():
+            del _token_cache[key]
+            return None
+        return hit[1]
+
+
+def _cache_put(key: str, user: UserResponse, ttl: float) -> None:
+    if ttl <= 0:
+        return
+    now = time.monotonic()
+    with _token_lock:
+        if len(_token_cache) >= _TOKEN_CACHE_MAX:
+            # ponytail: 10k entry ceiling, drop expired then clear; LRU if churn matters
+            for k in [k for k, (exp, _) in _token_cache.items() if exp <= now]:
+                del _token_cache[k]
+            if len(_token_cache) >= _TOKEN_CACHE_MAX:
+                _token_cache.clear()
+        _token_cache[key] = (now + ttl, user)
+
+
+def _token_ttl(token: str) -> float:
+    """60s, capped at the JWT exp. Unverified read: it only shortens the TTL."""
+    try:
+        seg = token.split(".")[1]
+        exp = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))["exp"]
+        return min(_TOKEN_TTL, float(exp) - time.time())
+    except Exception:  # noqa: BLE001 - unparseable exp, use the default
+        return _TOKEN_TTL
+
+
+def _fetch_user(token: str):
+    """Blocking Supabase lookup; run in a worker thread."""
+    try:
+        return get_client().auth.get_user(token)
+    except RemoteProtocolError:
+        # retry stale pool HTTP/2 connection
+        return get_client().auth.get_user(token)
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> UserResponse:
@@ -81,12 +143,13 @@ async def get_current_user(
     if credentials is None:
         raise _credentials_error("Not authenticated")
 
+    token = credentials.credentials
+    key = hashlib.sha256(token.encode()).hexdigest()
+    if (hit := _cache_get(key)) is not None:
+        return hit
+
     try:
-        try:
-            response = get_client().auth.get_user(credentials.credentials)
-        except RemoteProtocolError:
-            # retry stale pool HTTP/2 connection
-            response = get_client().auth.get_user(credentials.credentials)
+        response = await anyio.to_thread.run_sync(_fetch_user, token)
     except RemoteProtocolError as exc:
         # retry failed too, so it's the upstream not the token
         logger.warning("supabase auth unreachable", exc_info=True)
@@ -100,7 +163,9 @@ async def get_current_user(
     if response is None or response.user is None:
         raise _credentials_error("Invalid or expired token")
 
-    return _to_user_response(response.user)
+    user = _to_user_response(response.user)
+    _cache_put(key, user, _token_ttl(token))
+    return user
 
 
 CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
