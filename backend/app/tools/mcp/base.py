@@ -8,13 +8,27 @@ import time
 from collections import OrderedDict
 from contextvars import ContextVar
 from typing import Any
+from urllib.parse import urlparse
 
+import anyio
 import httpx
 from fastmcp.exceptions import McpError
 from pydantic_ai import ModelRetry
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 
-from app.tools.base import ToolContext, VerifyResult
+from app.config import settings
+from app.tools.base import ToolContext, VerifyResult, is_public_url
+
+_BLOCKED = "That address is not reachable from here."
+
+
+def _allowed(url: str) -> bool:
+    """http(s) only, and public unless running locally (Obsidian-style bridges)."""
+    if urlparse(url).scheme not in ("http", "https"):
+        return False
+    # ponytail: resolve-then-connect leaves a DNS rebinding window; pin the IP if this matters.
+    return settings.environment == "development" or is_public_url(url)
+
 
 log = logging.getLogger(__name__)
 
@@ -204,6 +218,8 @@ async def close_pool() -> None:
 def toolset_from_ctx(ctx: ToolContext, *, token_key: str = "auth_token") -> MCPToolset:  # noqa: S107
     """Build a toolset from ctx.config['url'] plus a bearer token secret."""
     url = str(ctx.config.get("url") or "")
+    if not _allowed(url):
+        raise ValueError(_BLOCKED)
     headers: dict[str, str] = dict(ctx.config.get("headers") or {})
     token = ctx.secrets.get(token_key, "")
     if token:
@@ -219,6 +235,8 @@ async def verify_toolset(url: str, build_toolset) -> VerifyResult:
     """
     if not url.strip():
         return VerifyResult(ok=False, detail="Missing server URL.")
+    if not await anyio.to_thread.run_sync(_allowed, url):
+        return VerifyResult(ok=False, detail=_BLOCKED)
     token = _FRESH.set(not POOLED_VERIFY.get())
     try:
         built = build_toolset()

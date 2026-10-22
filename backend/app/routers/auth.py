@@ -17,7 +17,7 @@ from pydantic import BaseModel, EmailStr, Field
 from supabase import ClientOptions, create_client
 
 from app.config import settings
-from app.services.supabase import get_client
+from app.services.supabase import get_auth_client, get_client
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ def signup(req: SignUpRequest) -> dict[str, str]:
 def login(req: LoginRequest) -> TokenResponse:
     """Login a user and return access and refresh tokens."""
     try:
-        response = get_client().auth.sign_in_with_password(
+        response = get_auth_client().auth.sign_in_with_password(
             {"email": req.email, "password": req.password}
         )
     except Exception as exc:
@@ -247,7 +247,7 @@ def login(req: LoginRequest) -> TokenResponse:
 def refresh(req: RefreshRequest) -> TokenResponse:
     """Refresh an access token using a refresh token."""
     try:
-        response = get_client().auth.refresh_session(req.refresh_token)
+        response = get_auth_client().auth.refresh_session(req.refresh_token)
     except Exception as exc:
         raise _credentials_error("Invalid or expired refresh token") from exc
 
@@ -268,16 +268,19 @@ def me(user: CurrentUser) -> UserResponse:
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(user: CurrentUser) -> None:
-    """Best-effort revocation.
+def logout(auth: CurrentAuth) -> None:
+    """Best-effort revocation of the caller's own session.
 
     Requiring a valid token stops unauthenticated callers from poking this.
     Clients should still discard both tokens locally.
     """
+    # drop it from get_current_user's cache, or it passes for up to _TOKEN_TTL
+    with _token_lock:
+        _token_cache.pop(hashlib.sha256(auth.token.encode()).hexdigest(), None)
     try:
-        get_client().auth.sign_out()
+        get_client().auth.admin.sign_out(auth.token, "local")
     except Exception:
-        logger.warning("sign_out failed for user %s", user.id, exc_info=True)
+        logger.warning("sign_out failed for user %s", auth.user.id, exc_info=True)
 
 
 @router.post("/password-reset", status_code=status.HTTP_202_ACCEPTED)

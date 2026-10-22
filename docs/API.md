@@ -70,7 +70,7 @@ discover which emails are registered.
 → `200` `{ "id": "uuid", "email": "you@example.com" }`
 
 ### `POST /auth/logout`
-→ `204`. Clients should still discard both tokens locally.
+→ `204`. Revokes only the caller's session. Clients should still discard both tokens locally.
 
 ### `POST /auth/password-reset`
 ```json
@@ -493,16 +493,30 @@ open. It does not redirect.
 
 ### `GET /oauth/callback`
 
-Google redirects the browser here after consent. **Unauthenticated**: the user
-arrives from Google with no bearer token, so a signed `state` parameter is the
-only trust. It carries the node id and owner id, is signed with
-`OAUTH_STATE_SECRET`, and expires in ten minutes.
+Google redirects the browser here after consent. **Unauthenticated**, and it
+stores nothing: it `302`s to `FRONTEND_URL?oauth_code=<code>&oauth_state=<state>`
+so the signed-in frontend can finish with `POST /oauth/complete`. If Google sent
+`error` (user denied) or `code`/`state` is missing, it `302`s with `?oauth=error`.
 
-The backend exchanges the code server-side, so the client secret never reaches
-the browser, stores the refresh token in Supabase Vault, runs verify, and then
-`302`s to `FRONTEND_URL` with an `oauth=connected` or `oauth=error` query param.
+### `POST /oauth/complete`
 
-`400` for a missing, malformed, tampered or expired state.
+Bearer auth. Finishes the connect flow as the caller.
+```json
+{ "code": "<oauth_code>", "state": "<oauth_state>" }
+```
+
+`state` is signed with `OAUTH_STATE_SECRET`, carries the node id and owner id,
+and expires in ten minutes. Its owner must be the caller, so a consent link
+can't be completed into someone else's node. The backend exchanges the code
+server-side, stores the refresh token in Supabase Vault, and runs verify.
+
+→ `200`
+```json
+{ "status": "connected" }
+```
+
+`400` bad or expired state. `403` state belongs to another user. `404` node not
+found. `422` Google returned no refresh token. `502` code exchange failed.
 
 ### `POST /projects/{project_id}/nodes` (`kind: "tool"`)
 ```json

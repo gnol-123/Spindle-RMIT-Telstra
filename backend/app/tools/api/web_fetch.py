@@ -5,15 +5,13 @@ view of this tool.
 """
 
 import html as html_lib
-import ipaddress
 import re
-import socket
-from urllib.parse import urlparse
 
 import httpx
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.tools.base import ToolContext, VerifyResult
+from app.tools.base import is_public_url as _is_public
 
 _TIMEOUT = 15.0
 _MAX_BYTES = 500_000
@@ -48,22 +46,6 @@ def to_text(html: str) -> str:
 def _transport() -> httpx.AsyncBaseTransport | None:
     # Hook for tests to swap in a MockTransport.
     return None
-
-
-def _is_public(url: str) -> bool:
-    """False for anything that resolves to loopback, private, link-local or reserved space."""
-    host = urlparse(url).hostname
-    if not host:
-        return False
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return False
-    return bool(infos)
 
 
 def build(ctx: ToolContext) -> FunctionToolset:
