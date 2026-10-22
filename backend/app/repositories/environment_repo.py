@@ -93,7 +93,27 @@ class EnvironmentRepository:
         position_x: float = 0.0,
         position_y: float = 0.0,
     ) -> str:
-        """Provision an environment box.
+        """Provision an environment box."""
+        return self._insert_environment_node(
+            project_id,
+            name,
+            config,
+            tool_policy=tool_policy,
+            position_x=position_x,
+            position_y=position_y,
+        )["id"]
+
+    def _insert_environment_node(
+        self,
+        project_id: str,
+        name: str,
+        config: dict[str, Any],
+        *,
+        tool_policy: str = "ask",
+        position_x: float = 0.0,
+        position_y: float = 0.0,
+    ) -> dict[str, Any]:
+        """Insert the row and return it as stored.
 
         Neither type id is set: nodes_type_matches_kind requires both null for
         this kind.
@@ -116,7 +136,7 @@ class EnvironmentRepository:
             )
             .execute()
         ).data
-        return rows[0]["id"]
+        return rows[0]
 
     def get_environment_node(self, node_id: str) -> EnvNode | None:
         rows = (
@@ -129,6 +149,21 @@ class EnvironmentRepository:
             .execute()
         ).data
         return _to_env_node(rows[0]) if rows else None
+
+    def get_environment_nodes(self, node_ids: list[str]) -> list[EnvNode]:
+        """Batch get_environment_node: input order, missing ids dropped."""
+        if not node_ids:
+            return []
+        rows = (
+            self._db.table("nodes")
+            .select(_ENV_COLUMNS)
+            .in_("id", node_ids)
+            .eq("owner_id", self._user_id)
+            .eq("kind", "environment")
+            .execute()
+        ).data
+        by_id = {r["id"]: _to_env_node(r) for r in rows}
+        return [by_id[i] for i in node_ids if i in by_id]
 
     def list_environment_nodes(self, project_id: str) -> list[EnvNode]:
         rows = (
@@ -175,21 +210,24 @@ class EnvironmentRepository:
         ).data
         return _to_env_node(rows[0]) if rows else None
 
-    def ensure_scratch_node(self, project_id: str) -> EnvNode:
+    def ensure_scratch_node(self, project_id: str, *, new_project: bool = False) -> EnvNode:
         """The project's own scratch space, created on first ask.
 
         nodes_one_scratch_per_project makes a concurrent second create fail
         rather than duplicate, so a unique violation means the other caller
-        won and the row is there to read.
+        won and the row is there to read. ``new_project`` skips the lookup:
+        nothing can be there yet.
         """
-        existing = self.get_scratch_node(project_id)
-        if existing is not None:
-            return existing
+        if not new_project:
+            existing = self.get_scratch_node(project_id)
+            if existing is not None:
+                return existing
 
         try:
-            self.create_environment_node(
+            row = self._insert_environment_node(
                 project_id, "Scratch Space", scratch_config(), tool_policy="auto"
             )
+            return _to_env_node(row)
         except APIError as exc:
             if exc.code != _UNIQUE_VIOLATION:
                 raise

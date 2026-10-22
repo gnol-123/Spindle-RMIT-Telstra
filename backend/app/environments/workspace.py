@@ -279,10 +279,49 @@ for addr, port, inode in socks:
         e["pid"] = int(pid)
         e["command"] = cmd
         e["cwd"] = cwd
-print(json.dumps(sorted(res.values(), key=lambda r: r["port"])))
+ports = sorted(res.values(), key=lambda r: r["port"])
 """
 
-PORTS_COMMAND = f"python3 -c {shlex.quote(_PORTS_SCRIPT)}"
+PORTS_COMMAND = f"python3 -c {shlex.quote(_PORTS_SCRIPT + 'print(json.dumps(ports))')}"
+
+# Same scan plus the HTTP probe and the folder html listing, one JSON line:
+# {"ports": [...], "web": [port, ...], "html": {dir: [name, ...]}}.
+_SCAN_SCRIPT = (
+    _PORTS_SCRIPT
+    + """
+import http.client, posixpath
+from concurrent.futures import ThreadPoolExecutor
+def ok(port):
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        c.request("GET", "/")
+        c.getresponse()
+        return port
+    except Exception:
+        return None
+def folder(r):
+    parts = r["command"].split()
+    if "http.server" not in parts:
+        return None
+    d = None
+    if "--directory" in parts:
+        i = parts.index("--directory")
+        if i + 1 < len(parts):
+            d = posixpath.normpath(" ".join(parts[i + 1 :]).split(" --")[0])
+    d = d or (posixpath.normpath(r["cwd"]) if r["cwd"] else None)
+    return d if d and d.startswith("/") else None
+with ThreadPoolExecutor(max_workers=16) as ex:
+    web = [p for p in ex.map(ok, [r["port"] for r in ports]) if p is not None]
+html = {}
+for d in {folder(r) for r in ports} - {None}:
+    try:
+        html[d] = [n for n in os.listdir(d) if n.lower().endswith(".html")]
+    except OSError:
+        pass
+print(json.dumps({"ports": ports, "web": web, "html": html}))
+"""
+)
+SCAN_COMMAND = f"python3 -c {shlex.quote(_SCAN_SCRIPT)}"
 
 # The fallback when python3 is missing: raw socket tables, parsed here.
 PROC_NET_COMMAND = "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"
@@ -322,6 +361,10 @@ class ListeningPort:
 
 def parse_ports_json(stdout: str) -> list[ListeningPort]:
     rows = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else []
+    return _ports_from_rows(rows)
+
+
+def _ports_from_rows(rows: list[dict[str, Any]]) -> list[ListeningPort]:
     return [
         ListeningPort(
             port=int(r["port"]),
@@ -548,6 +591,24 @@ async def folder_html_files(sandbox: AsyncSandbox, directories: list[str]) -> di
     except Exception:
         logger.info("html listing failed, previews left as is")
         return {}
+
+
+async def scan_previews(
+    sandbox: AsyncSandbox,
+) -> tuple[list[ListeningPort], dict[str, list[str]]]:
+    """(web ports, html names per folder) in one command, else the separate commands."""
+    try:
+        r = await sandbox.commands.run(SCAN_COMMAND, timeout=20, user="user")
+        data = json.loads(r.stdout.strip().splitlines()[-1])
+        web = {int(p) for p in data["web"]}
+        listening = [p for p in previewable(_ports_from_rows(data["ports"])) if p.port in web]
+        html = {str(d): [str(n) for n in names] for d, names in data["html"].items()}
+        return listening, html
+    except Exception:
+        logger.info("combined scan failed, falling back to separate commands")
+    listening = await web_ports(sandbox, await listening_ports(sandbox))
+    folders = {d for p in listening if (d := folder_server_dir(p))}
+    return listening, await folder_html_files(sandbox, sorted(folders))
 
 
 def fix_folder_paths(

@@ -194,6 +194,21 @@ class ToolRepository:
         ).data
         return rows[0]["id"]
 
+    def create_tool_nodes(self, project_id: str, rows: list[dict]) -> list[str]:
+        """Provision many tool nodes in one request. All or nothing.
+
+        Each row: tool_type_id, name, config, position_x, position_y.
+        """
+        out = (
+            self._db.table("nodes")
+            .insert(
+                [{"project_id": project_id, "kind": "tool", "status": "pending", **r} for r in rows]
+            )
+            .execute()
+            .data
+        )
+        return [r["id"] for r in out]
+
     def get_tool_node(self, node_id: str) -> ToolNode | None:
         rows = (
             self._db.table("nodes")
@@ -205,6 +220,21 @@ class ToolRepository:
             .execute()
         ).data
         return _to_tool_node(rows[0]) if rows else None
+
+    def get_tool_nodes(self, node_ids: list[str]) -> list[ToolNode]:
+        """Batch get_tool_node: input order, missing ids dropped."""
+        if not node_ids:
+            return []
+        rows = (
+            self._db.table("nodes")
+            .select(_TOOL_NODE_COLUMNS)
+            .in_("id", node_ids)
+            .eq("owner_id", self._user_id)
+            .eq("kind", "tool")
+            .execute()
+        ).data
+        by_id = {r["id"]: _to_tool_node(r) for r in rows}
+        return [by_id[i] for i in node_ids if i in by_id]
 
     def set_node_config(self, node_id: str, config: dict[str, Any]) -> None:
         (
@@ -221,6 +251,17 @@ class ToolRepository:
             self._db.table("nodes")
             .update({"status": status, "status_detail": detail})
             .eq("id", node_id)
+            .eq("owner_id", self._user_id)
+            .eq("kind", "tool")
+            .execute()
+        )
+
+    def set_nodes_status(self, node_ids: list[str], status: str, detail: str | None) -> None:
+        """Batch set_node_status: one PATCH for many nodes."""
+        (
+            self._db.table("nodes")
+            .update({"status": status, "status_detail": detail})
+            .in_("id", node_ids)
             .eq("owner_id", self._user_id)
             .eq("kind", "tool")
             .execute()
@@ -243,6 +284,22 @@ class ToolRepository:
             .execute()
         ).data
         return [r["key"] for r in rows]
+
+    def secret_keys_for_nodes(self, node_ids: list[str]) -> dict[str, list[str]]:
+        """Batch secret_keys. Nodes with no keys are absent."""
+        if not node_ids:
+            return {}
+        rows = (
+            self._db.table("node_secrets")
+            .select("node_id, key")
+            .in_("node_id", node_ids)
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        out: dict[str, list[str]] = {}
+        for r in rows:
+            out.setdefault(r["node_id"], []).append(r["key"])
+        return out
 
     # -- tool calls -------------------------------------------------------------
 
@@ -343,6 +400,22 @@ class ToolRepository:
         ).data
         return rows[0] if rows else None
 
+    def get_calls_by_tool_call_ids(
+        self, conversation_id: str, tool_call_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Batch get_call_by_tool_call_id, keyed by tool_call_id."""
+        if not tool_call_ids:
+            return {}
+        rows = (
+            self._db.table("tool_calls")
+            .select(_TOOL_CALL_COLUMNS)
+            .eq("conversation_id", conversation_id)
+            .in_("tool_call_id", tool_call_ids)
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        return {r["tool_call_id"]: r for r in rows}
+
     def finish_call_by_tool_call_id(
         self,
         conversation_id: str,
@@ -367,6 +440,19 @@ class ToolRepository:
             .update(payload)
             .eq("conversation_id", conversation_id)
             .eq("tool_call_id", tool_call_id)
+            .eq("owner_id", self._user_id)
+            .execute()
+        )
+
+    def set_calls_status(self, conversation_id: str, tool_call_ids: list[str], status: str) -> None:
+        """Batch finish_call_by_tool_call_id, status only."""
+        if not tool_call_ids:
+            return
+        (
+            self._db.table("tool_calls")
+            .update({"status": status})
+            .eq("conversation_id", conversation_id)
+            .in_("tool_call_id", tool_call_ids)
             .eq("owner_id", self._user_id)
             .execute()
         )

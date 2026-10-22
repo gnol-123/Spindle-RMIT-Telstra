@@ -7,7 +7,7 @@ from pydantic_ai.mcp import MCPToolset
 from app.oauth import google
 from app.oauth.base import TokenSet
 from app.tools.base import ToolContext, VerifyResult
-from app.tools.mcp.base import toolset, verify_toolset
+from app.tools.mcp.base import pooled, verify_toolset
 
 # node_id -> cached access token. In memory only, never the vault.
 _CACHE: dict[str, TokenSet] = {}
@@ -32,7 +32,7 @@ def build(ctx: ToolContext) -> MCPToolset:
     access_token = ctx.secrets.get("oauth_access_token", "")
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
-    return toolset(url, headers)
+    return pooled(url, headers)
 
 
 async def verify(ctx: ToolContext) -> VerifyResult:

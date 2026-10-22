@@ -18,6 +18,7 @@ import SpindleAnim from "./SpindleAnim";
 
 const SAMPLES = ["Finance tracker", "Build me a finance tracker", "Recipe box", "Make a habit app with streaks"];
 const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+const CLASSIFY_DEBOUNCE_MS = 700;
 
 function firstName(user: User | null) {
   if (!user) return "";
@@ -154,7 +155,7 @@ export default function ProjectsScreen({
     setError(null);
     cancelClassify();
     setPhase("idle");
-    if (value.trim()) timer.current = window.setTimeout(() => classify(value), 3000);
+    if (value.trim()) timer.current = window.setTimeout(() => classify(value), CLASSIFY_DEBOUNCE_MS);
   }
 
   async function handleAction() {

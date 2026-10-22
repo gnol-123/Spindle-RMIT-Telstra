@@ -225,7 +225,7 @@ export default function ChatWindow({
   onInitialPromptSent,
 }: {
   projectId: string;
-  node: AgentNode; // carries a polled `status`, refreshed every 2s by the canvas
+  node: AgentNode; // carries a synced `status`, refreshed by the canvas sync
   nodes: ProjectNode[];
   edges: Edge[];
   chat: ChatState;
@@ -419,7 +419,7 @@ export default function ChatWindow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.id]);
 
-  // After hydration: the canvas poll (every 2s) flips node.status to
+  // After hydration: the canvas sync flips node.status to
   // "running" when the orchestrator starts a turn on this agent behind our
   // back. If we're not busy and not already attaching, fetch the tail
   // (the orchestrator's user message plus whatever's streamed so far) and
