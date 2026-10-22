@@ -350,6 +350,14 @@ export async function authorizeNode(projectId: string, nodeId: string) {
   );
 }
 
+export async function completeOAuth(code: string, state: string) {
+  return request<{ status: string }>("/oauth/complete", {
+    method: "POST",
+    body: { code, state },
+    auth: true,
+  });
+}
+
 export async function listToolCalls(
   projectId: string,
   nodeId: string,

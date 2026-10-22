@@ -1,4 +1,5 @@
 import logging
+import re
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,25 @@ from app.services.dbos_app import setup_dbos
 from app.services.runs import join_detached
 
 log = logging.getLogger(__name__)
+
+_TOKEN = re.compile(r"(token=)[^&\s\"']+")
+
+
+class RedactToken(logging.Filter):
+    """Blanks ?token= values (terminal websocket bearer) in uvicorn log lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _TOKEN.sub(r"\1[redacted]", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN.sub(r"\1[redacted]", a) if isinstance(a, str) else a for a in record.args
+            )
+        return True
+
+
+for _name in ("uvicorn.error", "uvicorn.access"):
+    logging.getLogger(_name).addFilter(RedactToken())
 
 app = FastAPI(title=settings.app_name)
 

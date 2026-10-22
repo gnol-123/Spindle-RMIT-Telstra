@@ -47,6 +47,25 @@ def get_client() -> Client:
     )
 
 
+def get_auth_client() -> Client:
+    """Uncached client for calls that store a session (sign-in, refresh).
+
+    supabase_auth keeps the last session on the client, so a shared one would
+    hand the next caller someone else's session.
+    """
+    if not settings.supabase_url or not settings.supabase_key:
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_KEY must be set; copy .env.example to .env and fill them in."
+        )
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_key,
+        options=ClientOptions(
+            persist_session=False, auto_refresh_token=False, httpx_client=_user_http()
+        ),
+    )
+
+
 def get_user_client(jwt: str) -> Client:
     """Build a Supabase client that acts *as the signed-in user*.
 

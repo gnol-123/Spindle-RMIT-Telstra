@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     app_name: str = "MuruDPipeline API"
     environment: str = "development"
-    cors_origins: str = "*"
+    cors_origins: str = "http://localhost:3000"
     llm_provider: str = "ollama"
     # Hosted Ollama. A local install is http://localhost:11434/v1.
     ollama_base_url: str = "https://ollama.com/v1"

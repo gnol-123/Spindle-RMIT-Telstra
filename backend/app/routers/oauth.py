@@ -1,4 +1,4 @@
-"""The oauth2 connect flow: authorize builds the consent URL, callback lands it."""
+"""The oauth2 connect flow: authorize builds the consent URL, complete lands it."""
 
 from urllib.parse import urlencode
 from uuid import UUID
@@ -75,36 +75,56 @@ async def authorize(
     return AuthorizeResponse(url=url)
 
 
-def _redirect_with_status(status_value: str, detail: str | None = None) -> RedirectResponse:
-    params = {"oauth": status_value}
-    if detail:
-        params["detail"] = detail
+def _redirect_to_frontend(params: dict[str, str]) -> RedirectResponse:
     return RedirectResponse(f"{settings.frontend_url}?{urlencode(params)}")
 
 
 @router.get(_CALLBACK_PATH, name="oauth_callback")
 async def oauth_callback(
-    request: Request,
     code: str | None = None,
     state: str | None = None,
+    error: str | None = None,
 ) -> RedirectResponse:
-    """Google lands here. No bearer token: the signed state is the only trust."""
-    if not code or not state:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
+    """Google lands here. No auth, so just bounce code + state to the frontend."""
+    if error or not code or not state:
+        return _redirect_to_frontend({"oauth": "error"})
+    return _redirect_to_frontend({"oauth_code": code, "oauth_state": state})
 
+
+class CompleteRequest(BaseModel):
+    code: str
+    state: str
+
+
+@router.post("/oauth/complete")
+async def oauth_complete(
+    req: CompleteRequest, request: Request, auth: CurrentAuth
+) -> dict[str, str]:
+    """Exchange the code, bound to the caller: state's owner must be the bearer."""
     try:
-        node_id, owner_id = verify_state(state)
+        node_id, owner_id = verify_state(req.state)
     except InvalidStateError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    if owner_id != auth.user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
+
+    node = await to_thread.run_sync(get_tool_node_for_owner, node_id, owner_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool node not found")
+
     try:
-        token_set = await google.exchange_code(code, _redirect_uri(request))
-    except google.TokenExchangeError:
-        return _redirect_with_status("error", "Could not complete sign-in with Google.")
+        token_set = await google.exchange_code(req.code, _redirect_uri(request))
+    except google.TokenExchangeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not complete sign-in with Google.",
+        ) from exc
 
     if not token_set.refresh_token:
-        return _redirect_with_status(
-            "error", "Google did not return a refresh token. Reconnect and approve access again."
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Google did not return a refresh token. Reconnect and approve access again.",
         )
 
     refresh_token = token_set.refresh_token
@@ -114,11 +134,11 @@ async def oauth_callback(
 
     await _verify_as_owner(node_id, owner_id)
 
-    return _redirect_with_status("connected")
+    return {"status": "connected"}
 
 
 async def _verify_as_owner(node_id: str, owner_id: str) -> None:
-    """Run verify with no caller JWT: the signed state already proved ownership.
+    """Run verify through service-role helpers: complete already proved ownership.
 
     Same steps as projects._verify_tool_node, through the owner-scoped
     service-role helpers instead of a caller-scoped ToolRepo.

@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js";
 import type { Components } from "react-markdown";
+import { escapeHtml } from "@/lib/highlight";
 
 const components: Components = {
   p: ({ children }) => <p className="mb-2 last:mb-0 leading-[1.6]">{children}</p>,
@@ -39,7 +40,7 @@ const components: Components = {
     const raw = String(children).replace(/\n$/, "");
     // block code: className is set by remark
     if (lang) {
-      let highlighted = raw;
+      let highlighted = escapeHtml(raw);
       try {
         highlighted = hljs.highlight(raw, { language: lang }).value;
       } catch {

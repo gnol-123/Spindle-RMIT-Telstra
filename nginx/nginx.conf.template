@@ -21,8 +21,12 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
+# No query string: the terminal websocket carries its token there
+log_format noquery '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent';
+
 server {
     listen ${PORT};
+    access_log /dev/stdout noquery;
 
     # Re-resolve the backend so a redeploy's new private IP is picked up
     resolver ${RESOLVER} valid=10s;

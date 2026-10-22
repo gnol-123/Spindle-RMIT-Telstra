@@ -14,6 +14,9 @@ _CACHE: dict[str, TokenSet] = {}
 
 _EXPIRY_MARGIN_SECONDS = 60
 
+# Pinned: nodes.config is owner-editable, so a config url could leak the token.
+GMAIL_MCP_URL = "https://gmailmcp.googleapis.com/mcp/v1"
+
 
 async def access_token_for(node_id: str, refresh_token: str) -> str:
     """Cached access token, refreshing if absent or near expiry."""
@@ -27,12 +30,11 @@ async def access_token_for(node_id: str, refresh_token: str) -> str:
 
 
 def build(ctx: ToolContext) -> MCPToolset:
-    url = str(ctx.config.get("url") or "")
-    headers: dict[str, str] = dict(ctx.config.get("headers") or {})
+    headers: dict[str, str] = {}
     access_token = ctx.secrets.get("oauth_access_token", "")
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
-    return toolset(url, headers)
+    return toolset(GMAIL_MCP_URL, headers)
 
 
 async def verify(ctx: ToolContext) -> VerifyResult:
@@ -45,11 +47,10 @@ async def verify(ctx: ToolContext) -> VerifyResult:
     except google.TokenExchangeError:
         return VerifyResult(ok=False, detail="Access was revoked. Reconnect the node.")
 
-    url = str(ctx.config.get("url") or "")
     with_token = ToolContext(
         node_id=ctx.node_id,
         name=ctx.name,
         config=ctx.config,
         secrets={**ctx.secrets, "oauth_access_token": access_token},
     )
-    return await verify_toolset(url, lambda: build(with_token))
+    return await verify_toolset(GMAIL_MCP_URL, lambda: build(with_token))

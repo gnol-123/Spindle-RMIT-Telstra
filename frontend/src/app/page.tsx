@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { loadAuth, saveAuth } from "@/lib/auth";
-import { getMe } from "@/lib/api";
+import { completeOAuth, getMe } from "@/lib/api";
 import { Project } from "@/lib/types";
 import LoginScreen from "@/components/LoginScreen";
 import ProjectsScreen from "@/components/ProjectsScreen";
@@ -14,6 +14,8 @@ export default function Home() {
   // focusNodeId + initialPrompt: Build idea opens the orchestrator's chat and sends the idea.
   const [active, setActive] = useState<{ project: Project; focusNodeId?: string; initialPrompt?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // strict mode runs effects twice; the code is single-use
+  const oauthStarted = useRef(false);
 
   useEffect(() => {
     // Google login (POST /auth/login/google) returns the browser here with
@@ -28,13 +30,22 @@ export default function Home() {
       window.history.replaceState({}, "", window.location.pathname);
     }
 
-    // A tool node's OAuth connect flow (POST /nodes/{id}/authorize) is
-    // completed server-side and lands back here with a query param instead.
+    // A tool node's OAuth connect flow (POST /nodes/{id}/authorize) lands
+    // back here with ?oauth_code&oauth_state to complete as this user, or ?oauth=error.
     const search = new URLSearchParams(window.location.search);
     const oauth = search.get("oauth");
-    if (oauth === "connected") setNotice("Account connected — re-open the tool node to confirm it verified.");
-    else if (oauth === "error") setNotice("That account connection failed. Open the tool node and try again.");
-    if (oauth) window.history.replaceState({}, "", window.location.pathname);
+    const oauthCode = search.get("oauth_code");
+    const oauthState = search.get("oauth_state");
+    const connected = "Account connected. Re-open the tool node to confirm it verified.";
+    const failed = "That account connection failed. Open the tool node and try again.";
+    if (oauth === "error") setNotice(failed);
+    if (oauth || oauthCode || oauthState) window.history.replaceState({}, "", window.location.pathname);
+    if (oauthCode && oauthState && !oauthStarted.current) {
+      oauthStarted.current = true;
+      completeOAuth(oauthCode, oauthState)
+        .then(() => setNotice(connected))
+        .catch(() => setNotice(failed));
+    }
 
     const stored = loadAuth();
     if (!stored) {
