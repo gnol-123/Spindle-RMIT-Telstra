@@ -5,6 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Spindle | Telstra Muru-D Team 2",
   description: "Canvas of agent and tool nodes for the idea-to-prototype pipeline",
+  appleWebApp: { title: "Spindle" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
