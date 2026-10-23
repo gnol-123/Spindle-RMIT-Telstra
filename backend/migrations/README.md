@@ -22,8 +22,9 @@ creates, so run it second.
 | `previews.sql` | `previews` table with RLS (agent-published previews, thumbnail path) and the private `project-previews` bucket. Run fifteenth. |
 | `canvas_snapshot.sql` | `projects.canvas_snapshot_at`, set when a canvas screenshot is uploaded. Run sixteenth. |
 | `realtime_edges.sql` | Adds `edges` to the realtime publication. Run seventeenth. |
-| `idea_assessment.sql` | Market Sizing, DVF Assessment and Visual Report skills; new Market Research and Project Scoping prompts and defaults, backfilled. Run eighteenth. |
+| `idea_assessment.sql` | Market Sizing, DVF Assessment and Visual Report skills; new Market Research prompt and defaults, backfilled. Run eighteenth. |
 | `telstra_design.sql` | Telstra Design skill and prompt for the UX/UI agent, backfilled. Run nineteenth. |
+| `scope_report.sql` | Scope Report skill, reworked Scoping Brief, new Project Scoping prompt and defaults, backfilled. Run twentieth. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying

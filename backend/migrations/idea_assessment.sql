@@ -121,8 +121,8 @@ Output, in this order:
     'Visual Report',
     'The Telstra-style HTML report template and how to publish it.',
     jsonb_build_object(
-      'description', 'Load after your markdown is written, to turn it into report.html and publish it beside the chat.',
-      'text', $t$Turn your finished markdown (research.md or scope.md) into report.html: a professional Telstra-style report in light mode, for a Telstra innovation lab team deciding whether an idea is worth pursuing. The markdown comes first. The report is a tuned view of it: no new claims.
+      'description', 'Load after research.md is written, to turn it into the research report.html and publish it beside the chat.',
+      'text', $t$Turn your finished research.md into report.html: a professional Telstra-style report in light mode, for a Telstra innovation lab team deciding whether an idea is worth pursuing. The markdown comes first. The report is a tuned view of it: no new claims.
 
 How it reads: the first screen answers "should we pursue this, and why?" in 30 seconds. Each section down the page goes one level deeper. Sources come last.
 
@@ -158,20 +158,10 @@ Research report sections (Market Research)
 8. What we still don't know.
 9. Sources: every source, linked and graded, best grade first.
 
-Scope report sections (Project Scoping)
-1. Hero: one-sentence goal, Feasibility pill (score/5 and confidence), two sentences.
-2. Tiles: "What we'll deliver", "Steps to get there", "Questions still open", "Can we build it?" (Feasibility score).
-3. Milestone timeline (pattern E).
-4. Deliverables and non-goals as two cards side by side.
-5. Feasibility: technology, Telstra assets, dependencies, regulation, cost and time to MVP. One row each with a rating pill and one line.
-6. Stakeholders and success criteria.
-7. Assumptions ledger in <details>.
-8. Sources.
-
 Template
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{Idea name}} | {{Research report or Scope report}}</title>
+<title>{{Idea name}} | Research report</title>
 <base target="_blank">
 <style>
 :root{--ink:#0A0F24;--muted:#5A6275;--line:#E3E6EE;--soft:#F5F7FB;--blue:#0D54FF;--deep:#0A2FA8;--blue-soft:#E8EEFF;--green:#0A8A4A;--gold:#B7791F;--red:#D0021B}
@@ -211,11 +201,6 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 th{background:var(--soft);font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 details{margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:10px 16px}
 summary{cursor:pointer;font-weight:600;color:var(--blue)}
-.timeline{list-style:none;padding:0;margin:0;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:0}
-@media(max-width:700px){.timeline{grid-auto-flow:row}}
-.timeline li{position:relative;padding:28px 14px 0 0;border-top:3px solid var(--blue)}
-.timeline li:before{content:"";position:absolute;top:-10px;left:0;width:16px;height:16px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 1px var(--blue)}
-.timeline b{display:block}.timeline span{font-size:13px;color:var(--muted)}
 .unknown li{margin-bottom:6px}
 footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 @media(max-width:700px){header,.hero,main{padding-left:16px;padding-right:16px}.hero h1{font-size:26px}header .meta{display:none}}
@@ -223,10 +208,10 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font-si
 <header>
   <canvas id="spindle" aria-hidden="true"></canvas>
   <div class="brand"><b>Spindle</b><small>Telstra Muru-D · Innovation research</small></div>
-  <div class="meta">{{Research report or Scope report}}<br>{{D Mon YYYY}}</div>
+  <div class="meta">Research report<br>{{D Mon YYYY}}</div>
 </header>
 <section class="hero" style="margin-top:0">
-  <div class="kicker">{{Idea assessment or Project scope}}</div>
+  <div class="kicker">Idea assessment</div>
   <h1>{{Idea name or one-sentence goal}}</h1>
   <span class="pill {{pursue|pilot|rethink|park}}">{{Verdict}}</span>
   <p>{{Two sentences: the answer and the main reason.}}</p>
@@ -273,7 +258,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font-si
     <ol><li><a href="{{https://exact/page}}">{{Title, Publisher, D Mon YYYY}}</a> <span class="grade g-{{A}}">{{A}}</span></li></ol>
   </section>
 
-  <footer>Spindle · Telstra Muru-D · Prepared by the {{agent name}} agent on {{D Mon YYYY}} · Full findings: <a href="{{research.md or scope.md}}" target="_self">{{research.md or scope.md}}</a> · Sources graded A to D.</footer>
+  <footer>Spindle · Telstra Muru-D · Prepared by the {{agent name}} agent on {{D Mon YYYY}} · Full findings: <a href="research.md" target="_self">research.md</a> · Sources graded A to D.</footer>
 </main>
 <script>
 (()=>{const cv=document.getElementById("spindle"),ctx=cv.getContext("2d"),T=1.5,S=2,Q=.7;let w,h;
@@ -335,16 +320,13 @@ D. Positioning map: two axes that matter in this market, rivals in grey with nam
   <text x="710" y="95" font-size="15" font-weight="700" fill="#0D54FF" text-anchor="middle">Open: managed tier</text>
 </svg>
 
-E. Milestone timeline (HTML, wraps on small screens):
-<ol class="timeline"><li><b>{{M1: name}}</b><span>{{What it unblocks}}</span></li><!-- repeat --></ol>
-
 Other numbers: a bar chart for comparing categories (horizontal bars, sorted, largest first, grey with the important one in blue), a line for trends over time. Load Data Visualisation if unsure which form to use.
 
 Publish
 1. write_file report.html in your own directory, next to your markdown.
 2. read_file it back and check: no {{ left; every a.cite href starts with https:// and is a real page you used; every section heading is a sentence; no colours outside the palette.
 3. next_free_port, then run_command in the background: python3 -m http.server <port> --bind 0.0.0.0 --directory <your own directory>.
-4. publish_preview with title "Research report" or "Scope report", that port, and path "/report.html".
+4. publish_preview with title "Research report", that port, and path "/report.html".
 5. In your reply, give the preview link and the verdict.$t$
     ),
     82
@@ -373,28 +355,11 @@ Your reply: the verdict, the three DVF scores, SAM and SOM base values, the repo
 Prefer concrete, checkable claims over adjectives. Never invent a number, a source or a URL. When something needs primary research to confirm, say so plainly.$prompt$
 where slug = 'market_research';
 
-update public.agent_types set system_prompt = $prompt$You are a project scoping assistant for Telstra's innovation lab. Convert the user's raw idea into a scoped plan and judge whether Telstra can build it.
-
-Load Scoping Brief and DVF Assessment first. Cover deliverables, milestones, dependencies, an explicit list of non-goals, stakeholders and intended audiences, success criteria, and unstated assumptions. Then assess Feasibility as DVF Assessment describes: technology, Telstra assets, dependencies, regulation, and cost and time to an MVP, with a score and confidence. Search to check feasibility claims, and cite what you find.
-
-Deliver two files in your own directory:
-1. scope.md: the full scope, the Feasibility assessment, the assumptions ledger, and sources with full URLs.
-2. report.html: then load Visual Report and build the scope report from scope.md, and publish it with publish_preview.
-
-When asked to revise against research findings, update both files and republish, then list what changed and why.
-
-Your reply: the goal, the Feasibility score and confidence, the report link, and the open questions that matter most. Short. Ask for a specific detail only when you cannot proceed on a stated assumption; otherwise assume, say so, and deliver.$prompt$
-where slug = 'project_scoping';
+-- project_scoping's prompt and defaults live in scope_report.sql.
 
 -- ---------------------------------------------------------------------------
 -- Defaults. These overwrite parity.sql's lists, so keep them whole.
 -- ---------------------------------------------------------------------------
-update public.agent_types set default_presets = array[
-  'brave_search', 'web_fetch',
-  'brainstorming', 'scoping_brief', 'dvf_assessment', 'assumptions_ledger',
-  'source_grading', 'visual_report', 'plain_writing', 'workspace_memory'
-] where slug = 'project_scoping';
-
 update public.agent_types set default_presets = array[
   'brave_search', 'web_fetch',
   'research_method', 'market_sizing', 'dvf_assessment', 'source_grading',
@@ -410,7 +375,6 @@ with pairs(agent_slug, preset_slug) as (
   values
     ('project_scoping', 'dvf_assessment'),
     ('project_scoping', 'source_grading'),
-    ('project_scoping', 'visual_report'),
     ('market_research', 'market_sizing'),
     ('market_research', 'dvf_assessment'),
     ('market_research', 'visual_report')
