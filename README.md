@@ -1,67 +1,128 @@
 <p align="center">
-  <img src="docs/readme/hero.svg" alt="Spindle: a team of AI agents on a canvas, joined by arrows" width="100%">
+  <img src="docs/readme/hero.svg" alt="Spindle: turn a raw idea into a scoped, researched, built and judged prototype" width="100%">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs" alt="Next.js 16">
-  <img src="https://img.shields.io/badge/React-19-20232a?style=flat-square&logo=react" alt="React 19">
-  <img src="https://img.shields.io/badge/FastAPI-Python_3.12-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Pydantic_AI-agents-e92063?style=flat-square&logo=pydantic&logoColor=white" alt="Pydantic AI">
-  <img src="https://img.shields.io/badge/Supabase-auth_%2B_postgres-3ecf8e?style=flat-square&logo=supabase&logoColor=white" alt="Supabase">
-  <img src="https://img.shields.io/badge/E2B-sandboxes-ff8800?style=flat-square" alt="E2B">
-  <img src="https://img.shields.io/badge/Railway-deployed-0b0d0e?style=flat-square&logo=railway" alt="Railway">
+  <b>One sentence in. A scoped, researched, designed, built and honestly judged prototype out.</b><br>
+  <sub>A team of AI agents on one canvas, for innovation teams deciding which ideas deserve a real budget.</sub>
 </p>
 
 <p align="center">
-  <b>You bring the idea. A team of AI agents does the research, writes the brief, sketches the design and builds the thing.</b><br>
-  <sub>And you watch it all happen on one canvas.</sub>
+  <a href="#why-spindle">Why Spindle</a> ·
+  <a href="#the-pipeline">The pipeline</a> ·
+  <a href="#a-look-inside">A look inside</a> ·
+  <a href="#what-you-walk-away-with">What you walk away with</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#under-the-hood">Under the hood</a>
 </p>
 
 ---
 
-## What is this?
+## Why Spindle
 
-Most AI tools give you a single chat box. Spindle gives you a whiteboard instead.
+Most ideas die in a slide deck, or get built before anyone checks the market. Spindle runs the full path from idea to evidence: scope, market sizing, design, a working prototype, and a verdict. Every step stays visible, and you can edit any of it.
 
-Each card on the board is an AI agent with one job. One researches the market, one turns that into a project brief, one designs the screens, one writes the code. You connect them with arrows, and an arrow simply means *"you should know what that agent found out."*
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🔎 Evidence, not vibes</h3>
+      Market sizes are worked two ways, top-down and bottom-up. Every input carries a source and a grade. Anything the agents can't trace is marked <i>unverified</i>.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛠️ Built for real</h3>
+      The Coding agent writes and runs the app in a cloud sandbox. You get real files, a live preview, a terminal and a zip download, not a mockup.
+    </td>
+    <td width="33%" valign="top">
+      <h3>⚖️ An honest verdict</h3>
+      The Scrutinizer argues both sides with the same rigour: a pitch deck for the idea, a limitations deck against it, and a call of <b>Pursue</b>, <b>Pilot</b>, <b>Rethink</b> or <b>Park</b>.
+    </td>
+  </tr>
+</table>
 
-You can chat with any agent on its own. You can also hand the whole idea to the **Orchestrator**, and it will add the agents it thinks you need, wire them up and get them going.
+---
 
-When the Coding agent builds something, it builds it for real, inside a cloud sandbox. You can open its files, watch a live preview, use a terminal, and download the whole thing as a zip.
+## The pipeline
 
-## A quick look around
+<img src="docs/readme/pipeline.svg" alt="The Orchestrator runs Project Scoping, Market Research, UX/UI Design, Coding and Scrutinizer in order. Each hands its findings to the next." width="100%">
+
+Give the **Orchestrator** your idea. It adds the agents it needs to the canvas, connects them and runs them one at a time. Each agent reads what the earlier ones found.
+
+| Stage | Job | Hands over |
+|---|---|---|
+| **Project Scoping** | Goal, non-goals, milestones, feasibility, cost and time to an MVP | `scope.md` and a scope report |
+| **Market Research** | TAM / SAM / SOM, competitors, a desirability, viability and feasibility (DVF) scorecard | `research.md` and a research report |
+| **UX/UI Design** | User flows, screens and every state, built with the Telstra design system | A clickable `prototype.html` |
+| **Coding** | Builds the prototype into a working app and tests it | Source code, a running app and a live preview |
+| **Scrutinizer** | Judges the product against the research and the running app | A pitch deck, a limitations deck and a verdict |
+
+Quality is checked along the way. After scoping, coding and scrutiny, an **Evaluator** checks the handoff against its brief. A failed check sends that stage back once with the fixes attached. When the research lands, scoping runs again to revise the brief against the findings.
+
+---
+
+## A look inside
 
 ### The canvas
 
-![The canvas](docs/screenshots/canvas.png)
+<img src="docs/screenshots/canvas.png" alt="A full pipeline on the canvas: Orchestrator above five connected agents" width="100%">
 
-Each project gets its own canvas. The ready-made agents sit along the top: drag one onto the board and it arrives with a sensible set of tools already attached. To connect two agents, drag from the dot on the right of one card to the dot on the left of another.
-
-### The inspector
-
-<img src="docs/screenshots/inspector.png" alt="Agent inspector" width="100%">
-
-Click a card to see what it's made of. You'll find its **tools** (web search, page fetching, GitHub, Gmail, and "skills" like *Test Driven Development* or *Plain Writing*), its **sandboxes**, and its **tool policy**. Set the policy to *Ask before every tool call* if you'd like to approve each action yourself.
-
-### The chat
-
-![Chat window](docs/screenshots/chat.png)
-
-Double-click an agent to talk to it. The chips along the top show everything the agent can see right now: the agents feeding it, its sandboxes and its tools. Replies stream in as they're written, and you can stop one halfway through.
-
-An orange **STALE** chip means one of the agents feeding this one has said more since it was last summarised. You decide when to refresh it.
+Each project gets its own canvas. Every card is an agent with one job, and every arrow carries context from one agent to the next. Drag a ready-made agent from the library, or let the Orchestrator lay out the whole team for you. The canvas updates live while it works.
 
 ### The workspace
 
-![Full workspace](docs/screenshots/full-workspace.png)
+<img src="docs/screenshots/workspace-overview.png" alt="The workspace drawer showing a live deck preview and a card per agent" width="100%">
 
-Once an agent has a sandbox, **Files & preview** opens the workspace: file explorer, code, live preview, and a real terminal inside the sandbox. Files appear as the agent writes them. Hit **Download .zip** when you want to take the project with you.
+Pull up the workspace drawer for a view of every agent at once: what each one last wrote, how many files it made, and live previews of the pages they published.
 
-### The slides
+### Chat with any agent
 
-![Pitch deck](docs/screenshots/slides.png)
+<img src="docs/screenshots/chat.png" alt="Chatting with the Market Research agent, with a competitor table in its reply" width="100%">
 
-Once the app is built, the **Scrutinizer** judges it and writes two slide decks: a **pitch deck** that makes the case for the product, and a **limitations deck** that argues against it and ends with a verdict. Every number cites the research it came from, and anything it can't trace is marked *unverified*. Both decks open as live previews in the workspace.
+Double-click a card to talk to that agent directly. The chips along the top show everything it can see: the agents feeding it, its sandbox and its tools. Replies stream in, tool calls show as they happen, and you can pick the model per agent.
+
+### Tools and skills
+
+<img src="docs/screenshots/tool-shelf.png" alt="The tool shelf: Brave Search, Web Fetch, Context7, Obsidian, Canvas, MCP Server, GitHub, Gmail and skills" width="100%">
+
+<img src="docs/screenshots/inspector.png" alt="The agent inspector listing the Market Research agent's tools, sandbox and inherited context" width="100%">
+
+Drop a tool onto a card to equip it: web search, page fetching, GitHub, Gmail, Obsidian, any MCP server, and 29 **skills** such as *Market Sizing*, *DVF Assessment* and *Source Grading*. Click a card to open the inspector and see its tools, its sandbox and where its context comes from. Set the tool policy to *ask first* if you want to approve each call yourself.
+
+### Agents keep notes
+
+<img src="docs/screenshots/agent-page.png" alt="An agent page with its NOTES.md memory and the shared sandbox file explorer" width="100%">
+
+Each agent keeps a `NOTES.md` of facts that should outlive the conversation: decisions, open questions, bugs it found. The next agent, or the next session, picks up from there.
+
+### Files, code and a real terminal
+
+<img src="docs/screenshots/files-terminal.png" alt="The file explorer, server.js open in the code view, and a terminal in the sandbox" width="100%">
+
+Every agent works in its own folder inside the sandbox. Browse the files as they're written, read the code, open a terminal, and download the whole project as a zip.
+
+---
+
+## What you walk away with
+
+One idea, run end to end. These came out of a single run for a smart plant coaster.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/pitch-deck.png" alt="Pitch deck slide: one screen, one instruction, twelve states">
+      <p align="center"><b>The pitch deck</b><br><sub>The strongest honest case for the idea. Each claim is tagged with its source.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/limitations-deck.png" alt="Limitations deck slide: everything on the screen comes from one file that pretends to be firmware">
+      <p align="center"><b>The limitations deck</b><br><sub>The same evidence read the other way, ending in a verdict.</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <img src="docs/screenshots/built-app.png" alt="The working plant coaster status app built by the Coding agent">
+      <p align="center"><b>The working app</b><br><sub>Built and running in the sandbox, on simulated data, with tests.</sub></p>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -71,102 +132,61 @@ Once the app is built, the **Scrutinizer** judges it and writes two slide decks:
 
 <img src="docs/readme/context.svg" alt="How context moves along an arrow" width="100%">
 
-Drawing an arrow doesn't copy anything straight away. The arrow keeps a short **summary** of the source agent's conversation. Whenever the agent on the other end replies, it reads that summary first, so it answers as if it had been in the room.
+An arrow keeps a short **summary** of the source agent's conversation. Before the agent at the other end replies, it reads that summary, so it answers as if it had been in the room.
 
-If the source agent keeps talking, the summary falls behind and the arrow turns orange. It never refreshes on its own, because that would quietly spend money on every message. You click refresh when you want the new version.
+When the source agent keeps talking, the summary falls behind and the arrow turns orange. It never refreshes on its own, because that would spend money on every message. You choose when to refresh.
 
-### What happens when you hit Send
+### One turn, start to finish
 
 <img src="docs/readme/turn.svg" alt="The path of one message" width="100%">
 
-The agent reads what its arrows tell it and then starts answering. Partway through it might decide it needs a tool: a web search, a page fetch, a file in its sandbox. The tool runs, the result goes back to the agent, and it keeps writing. This can happen several times in one reply.
+The agent reads its arrows, then starts answering. Partway through it may call a tool: a search, a page fetch, a file in its sandbox. The result goes back to the agent and it keeps writing, sometimes several times in one reply.
 
-If you've set an agent to *ask first*, it stops at the tool and waits for your OK. That wait is saved in the database, not in memory, so you can approve it minutes later, even after the server has restarted, and it picks up exactly where it left off.
+If the agent is set to *ask first*, it pauses at the tool and waits for your OK. That pause is saved in the database, so you can approve it minutes later, even after a server restart, and it picks up where it left off.
 
-### A few things you get for free
+### Built in
 
-- **Your keys stay secret.** API keys go into Supabase Vault, encrypted. The agent never sees them, you can't read them back, and a database dump doesn't reveal them.
-- **You only see your own stuff.** Postgres itself filters every row by owner. Someone else's project doesn't return "forbidden", it returns "not found", as if it doesn't exist.
-- **One broken tool doesn't break the chat.** If a tool is misconfigured, the agent is told it's unavailable and carries on without it. If a tool fails mid-call, the agent sees the error and can try something else.
-- **Bad keys show up early.** Tools are checked when you save them, so a typo'd API key turns the card red right away instead of failing halfway through a conversation.
-
-For the deep dive with every diagram, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The full HTTP API is in [docs/API.md](docs/API.md).
-
----
-
-## Run it yourself
-
-You'll need **Python 3.12+**, **Node 20+**, a **Supabase** project and an **E2B** account. The LLM runs through Ollama's hosted API by default, and Gemini works too.
-
-**1. Backend**
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env             # fill in your keys (table below)
-```
-
-**2. Database.** Set `DBOS_DATABASE_URL` to your Supabase Postgres, then apply the migrations. `--dry-run` applies everything, shows you the result and rolls it back.
-
-```bash
-python migrations/apply.py --dry-run
-python migrations/apply.py
-```
-
-**3. Frontend**
-
-```bash
-cd frontend
-npm install
-cp .env.example .env.local       # NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-**4. Start both** from the repo root:
-
-```bash
-npm install
-npm run dev
-```
-
-Then open **http://localhost:3000**. Keep it on port 3000, because that's the address Supabase sign-in redirects back to.
-
-### Keys you'll need
-
-| Variable | What it's for |
-|---|---|
-| `SUPABASE_URL`, `SUPABASE_KEY` | Your Supabase project and its publishable key |
-| `SUPABASE_SERVICE_KEY` | Unlocks tool secrets from Vault. Backend only, never the frontend |
-| `DBOS_DATABASE_URL` | Postgres connection for migrations and saved runs |
-| `LLM_PROVIDER`, `OLLAMA_API_KEY` | The model provider (default `ollama`) |
-| `GEMINI_API_KEY` | Only if you switch the provider to Gemini |
-| `E2B_API_KEY` | Cloud sandboxes for the agents |
-| `BRAVE_API_KEY` | Web search |
-| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET` | Google sign-in and connecting Gmail |
-
-Every setting and its default lives in [backend/app/config.py](backend/app/config.py). The server starts fine without a model key: only chat fails, and `/health` stays green. The interactive API docs are at http://localhost:8000/docs.
+- **Secret keys stay secret.** API keys live encrypted in Supabase Vault. Agents never see them and nobody can read them back.
+- **Your projects are yours.** Postgres row-level security filters every query by owner. Someone else's project returns "not found", as if it doesn't exist.
+- **A broken tool doesn't break the chat.** A misconfigured tool is reported as unavailable and the agent carries on without it.
+- **Bad keys show up early.** Tools are checked when you save them, so a typo turns the card red before a conversation starts.
+- **Spend is tracked.** Token usage is recorded per project and per model, with per-user caps.
 
 ---
 
-## Where things live
+## Under the hood
 
-```
-backend/app/
-  routers/        the HTTP endpoints: auth, projects, chat, environments, oauth
-  services/       builds agents and runs each turn
-  tools/          skills, web tools, MCP connections, and the Orchestrator's canvas tool
-  environments/   E2B sandboxes: files, terminal, previews
-  repositories/   every database query, and nothing else
-backend/migrations/   plain SQL, applied in order by apply.py
-frontend/src/
-  components/             canvas, cards, chat, inspector
-  components/workspace/   file tree, code view, preview, terminal
-  lib/api.ts              one function per backend endpoint
-```
+<table>
+  <tr>
+    <td><b>Frontend</b></td>
+    <td>Next.js 16, React 19, Tailwind</td>
+  </tr>
+  <tr>
+    <td><b>Backend</b></td>
+    <td>FastAPI on Python 3.12, Pydantic AI for the agents, DBOS for durable runs</td>
+  </tr>
+  <tr>
+    <td><b>Data and auth</b></td>
+    <td>Supabase: Postgres with row-level security, Realtime, Vault and Google sign-in</td>
+  </tr>
+  <tr>
+    <td><b>Sandboxes</b></td>
+    <td>E2B cloud sandboxes for files, terminals and live previews</td>
+  </tr>
+  <tr>
+    <td><b>Hosting</b></td>
+    <td>Railway</td>
+  </tr>
+</table>
+
+For every diagram in detail, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The HTTP API is documented in [docs/API.md](docs/API.md).
 
 ---
 
 <p align="center">
-  <sub>Built by Team 2 for the Telstra Muru-D program. CI runs ruff, pytest, bandit and pip-audit on every push.</sub>
+  <img src="frontend/public/murud-logo.svg" alt="muru-D" height="40">
+</p>
+
+<p align="center">
+  <sub>Built by Team 2 for the Telstra muru-D program with RMIT University.</sub>
 </p>

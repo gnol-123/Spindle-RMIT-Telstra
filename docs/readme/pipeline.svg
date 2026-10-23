@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 540" width="1280" height="540" role="img" aria-label="The Spindle pipeline: scoping, research, design, coding and scrutiny, run by an orchestrator">
+<defs>
+  <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#1C2340"/></pattern>
+  <marker id="ah" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L8 5 L0 9 z" fill="#F44E1A"/></marker>
+</defs>
+<style>
+  text { font-family: Poppins, ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .card { fill: #131A35; stroke: #262E55; stroke-width: 1.5; }
+  .orch { stroke: #3A4A8C; }
+  .name { fill: #F5EDE2; font-size: 19px; font-weight: 700; }
+  .desc { fill: #9AA3C0; font-size: 14.5px; }
+  .num { fill: #F44E1A; font-size: 13px; font-weight: 700; }
+  .hire { fill: none; stroke: #5C8DFF; stroke-opacity: .35; stroke-width: 1.5; stroke-dasharray: 3 6; animation: dash 2.4s linear infinite reverse; }
+  .flow { stroke: #7ee787; stroke-width: 2; stroke-dasharray: 5 6; animation: dash 1s linear infinite; }
+  .loop { fill: none; stroke: #F44E1A; stroke-width: 1.6; stroke-dasharray: 4 5; animation: dash 1.4s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -22; } }
+  .pill { fill: #0A0F24; stroke: #F44E1A; stroke-opacity: .55; }
+  .pilltxt { fill: #F44E1A; font-size: 11.5px; font-weight: 700; letter-spacing: 1.5px; }
+  .lit { fill: none; stroke: #5C8DFF; stroke-width: 2; opacity: 0; animation: lit 10s infinite; }
+  .s1 .lit { animation-delay: 2s; } .s2 .lit { animation-delay: 4s; } .s3 .lit { animation-delay: 6s; } .s4 .lit { animation-delay: 8s; }
+  @keyframes lit { 0%,20%,100% { opacity: 0; } 2%,16% { opacity: 1; } }
+  .drop { stroke: #333D6B; stroke-width: 1.5; stroke-dasharray: 2 4; }
+  .file { fill: #0E1430; stroke: #262E55; }
+  .ficon { fill: none; stroke: #5C8DFF; stroke-width: 1.4; }
+  .ftxt { fill: #C9D3F0; font-size: 13.5px; }
+  .gatec { fill: #0A0F24; stroke: #7ee787; stroke-width: 1.8; }
+  .tick { fill: none; stroke: #7ee787; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .leg { fill: #8A93B5; font-size: 14px; }
+  @media (prefers-reduced-motion: reduce) { * { animation-play-state: paused !important; } }
+</style>
+<rect width="1280" height="540" rx="18" fill="#0A0F24"/>
+<rect width="1280" height="540" rx="18" fill="url(#dots)"/>
+<rect x="430.0" y="44" width="420" height="74" rx="14" class="card orch"/>
+<text x="640.0" y="74" text-anchor="middle" class="name">Orchestrator</text>
+<text x="640.0" y="99" text-anchor="middle" class="desc">hires each agent, wires the arrows, runs them in order</text>
+<path d="M640.0 118 C 640.0 180, 152.0 180, 152.0 244" class="hire"/>
+<path d="M640.0 118 C 640.0 180, 396.0 180, 396.0 244" class="hire"/>
+<path d="M640.0 118 C 640.0 180, 640.0 180, 640.0 244" class="hire"/>
+<path d="M640.0 118 C 640.0 180, 884.0 180, 884.0 244" class="hire"/>
+<path d="M640.0 118 C 640.0 180, 1128.0 180, 1128.0 244" class="hire"/>
+<path d="M356.0 250 C 356.0 204, 192.0 204, 192.0 246" class="loop" marker-end="url(#ah)"/>
+<rect x="208.0" y="200" width="132" height="24" rx="12" class="pill"/><text x="274.0" y="215" text-anchor="middle" class="mono pilltxt">REVISE SCOPE</text>
+<g class="stage s0">
+<rect x="41.0" y="250" width="222" height="112" rx="14" class="card"/>
+<rect x="41.0" y="250" width="222" height="112" rx="14" class="lit"/>
+<text x="59.0" y="280" class="mono num">01</text>
+<text x="59.0" y="308" class="name">Project Scoping</text>
+<text x="59.0" y="330" class="desc">goal, scope, feasibility</text>
+</g>
+<line x1="152.0" y1="362" x2="152.0" y2="392" class="drop"/>
+<rect x="55.0" y="392" width="194" height="30" rx="8" class="file"/><rect x="67.0" y="402" width="8" height="10" rx="1.5" class="ficon"/><text x="85.0" y="412" class="mono ftxt">scope.md</text>
+<rect x="55.0" y="430" width="194" height="30" rx="8" class="file"/><rect x="67.0" y="440" width="8" height="10" rx="1.5" class="ficon"/><text x="85.0" y="450" class="mono ftxt">scope report</text>
+<g class="gate"><circle cx="241.0" cy="250" r="13" class="gatec"/><path d="M236.0 250 l3.5 3.8 l6.5 -7.6" class="tick"/></g>
+<g class="stage s1">
+<rect x="285.0" y="250" width="222" height="112" rx="14" class="card"/>
+<rect x="285.0" y="250" width="222" height="112" rx="14" class="lit"/>
+<text x="303.0" y="280" class="mono num">02</text>
+<text x="303.0" y="308" class="name">Market Research</text>
+<text x="303.0" y="330" class="desc">TAM/SAM/SOM, DVF</text>
+</g>
+<line x1="266.0" y1="306.0" x2="280.0" y2="306.0" class="flow"/>
+<line x1="396.0" y1="362" x2="396.0" y2="392" class="drop"/>
+<rect x="299.0" y="392" width="194" height="30" rx="8" class="file"/><rect x="311.0" y="402" width="8" height="10" rx="1.5" class="ficon"/><text x="329.0" y="412" class="mono ftxt">research.md</text>
+<rect x="299.0" y="430" width="194" height="30" rx="8" class="file"/><rect x="311.0" y="440" width="8" height="10" rx="1.5" class="ficon"/><text x="329.0" y="450" class="mono ftxt">research report</text>
+<g class="stage s2">
+<rect x="529.0" y="250" width="222" height="112" rx="14" class="card"/>
+<rect x="529.0" y="250" width="222" height="112" rx="14" class="lit"/>
+<text x="547.0" y="280" class="mono num">03</text>
+<text x="547.0" y="308" class="name">UX/UI Design</text>
+<text x="547.0" y="330" class="desc">flows, screens, states</text>
+</g>
+<line x1="510.0" y1="306.0" x2="524.0" y2="306.0" class="flow"/>
+<line x1="640.0" y1="362" x2="640.0" y2="392" class="drop"/>
+<rect x="543.0" y="392" width="194" height="30" rx="8" class="file"/><rect x="555.0" y="402" width="8" height="10" rx="1.5" class="ficon"/><text x="573.0" y="412" class="mono ftxt">prototype.html</text>
+<g class="stage s3">
+<rect x="773.0" y="250" width="222" height="112" rx="14" class="card"/>
+<rect x="773.0" y="250" width="222" height="112" rx="14" class="lit"/>
+<text x="791.0" y="280" class="mono num">04</text>
+<text x="791.0" y="308" class="name">Coding</text>
+<text x="791.0" y="330" class="desc">builds it in a sandbox</text>
+</g>
+<line x1="754.0" y1="306.0" x2="768.0" y2="306.0" class="flow"/>
+<line x1="884.0" y1="362" x2="884.0" y2="392" class="drop"/>
+<rect x="787.0" y="392" width="194" height="30" rx="8" class="file"/><rect x="799.0" y="402" width="8" height="10" rx="1.5" class="ficon"/><text x="817.0" y="412" class="mono ftxt">working app</text>
+<rect x="787.0" y="430" width="194" height="30" rx="8" class="file"/><rect x="799.0" y="440" width="8" height="10" rx="1.5" class="ficon"/><text x="817.0" y="450" class="mono ftxt">live preview</text>
+<g class="gate"><circle cx="973.0" cy="250" r="13" class="gatec"/><path d="M968.0 250 l3.5 3.8 l6.5 -7.6" class="tick"/></g>
+<g class="stage s4">
+<rect x="1017.0" y="250" width="222" height="112" rx="14" class="card"/>
+<rect x="1017.0" y="250" width="222" height="112" rx="14" class="lit"/>
+<text x="1035.0" y="280" class="mono num">05</text>
+<text x="1035.0" y="308" class="name">Scrutinizer</text>
+<text x="1035.0" y="330" class="desc">argues both sides</text>
+</g>
+<line x1="998.0" y1="306.0" x2="1012.0" y2="306.0" class="flow"/>
+<line x1="1128.0" y1="362" x2="1128.0" y2="392" class="drop"/>
+<rect x="1031.0" y="392" width="194" height="30" rx="8" class="file"/><rect x="1043.0" y="402" width="8" height="10" rx="1.5" class="ficon"/><text x="1061.0" y="412" class="mono ftxt">pitch deck</text>
+<rect x="1031.0" y="430" width="194" height="30" rx="8" class="file"/><rect x="1043.0" y="440" width="8" height="10" rx="1.5" class="ficon"/><text x="1061.0" y="450" class="mono ftxt">limitations deck</text>
+<g class="gate"><circle cx="1217.0" cy="250" r="13" class="gatec"/><path d="M1212.0 250 l3.5 3.8 l6.5 -7.6" class="tick"/></g>
+<line x1="41.0" y1="500" x2="69.0" y2="500" class="flow"/>
+<text x="79.0" y="504" class="leg">context flows along the arrow</text>
+<circle cx="371.0" cy="500" r="9" class="gatec"/><path d="M367.0 500 l3 3.2 l5.5 -6.4" class="tick"/>
+<text x="387.0" y="504" class="leg">Evaluator checks the handoff</text>
+<path d="M681.0 506 q 14 -16 28 0" class="loop"/>
+<text x="719.0" y="504" class="leg">research sends scope back for a revision</text>
+</svg>
