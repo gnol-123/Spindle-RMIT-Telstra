@@ -69,6 +69,20 @@ test("visiblePreviews", () => {
   assert.equal(ledger[0].agent_node_id, "coder");
   // idempotent on its own output
   assert.deepEqual(visiblePreviews(ledger, agents, coding).map((x) => x.id), ["app", "deck"]);
+
+  // leftover servers from re-runs: published wins, else one folder server per agent
+  const dupes = visiblePreviews(
+    [
+      p("probe", true, true, "2026-10-20", "Probe page", "coder"),
+      p("old1", false, true, null, "coder"),
+      p("old2", false, true, null, "coder"),
+      p("s1", false, true, null, "scrut"),
+      p("s2", false, true, null, "scrut"),
+    ],
+    agents,
+    coding
+  );
+  assert.deepEqual(dupes.map((x) => x.id), ["probe", "s1"]);
 });
 
 test("shouldDragSheet", () => {

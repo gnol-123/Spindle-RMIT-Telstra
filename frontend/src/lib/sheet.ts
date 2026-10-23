@@ -98,9 +98,18 @@ export function visiblePreviews<P extends PreviewLike>(
   first: ReadonlySet<string> = new Set()
 ): P[] {
   const rank = (p: P) => (p.agent_node_id && first.has(p.agent_node_id) ? 0 : 1);
-  return list
+  const shown = list
     .filter((p) => p.live && (p.published || (p.title !== null && agentIds.has(p.title))))
-    .map((p) => (p.agent_node_id || p.title === null || !agentIds.has(p.title) ? p : { ...p, agent_node_id: p.title }))
+    .map((p) => (p.agent_node_id || p.title === null || !agentIds.has(p.title) ? p : { ...p, agent_node_id: p.title }));
+  // re-runs leave old servers on new ports: published wins, else one folder server per agent
+  const covered = new Set(shown.filter((p) => p.published && p.agent_node_id).map((p) => p.agent_node_id));
+  return shown
+    .filter((p) => {
+      if (p.published) return true;
+      if (covered.has(p.agent_node_id)) return false;
+      covered.add(p.agent_node_id);
+      return true;
+    })
     .sort((a, b) => rank(a) - rank(b) || (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
