@@ -23,6 +23,7 @@ creates, so run it second.
 | `canvas_snapshot.sql` | `projects.canvas_snapshot_at`, set when a canvas screenshot is uploaded. Run sixteenth. |
 | `realtime_edges.sql` | Adds `edges` to the realtime publication. Run seventeenth. |
 | `idea_assessment.sql` | Market Sizing, DVF Assessment and Visual Report skills; new Market Research and Project Scoping prompts and defaults, backfilled. Run eighteenth. |
+| `telstra_design.sql` | Telstra Design skill and prompt for the UX/UI agent, backfilled. Run nineteenth. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying

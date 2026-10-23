@@ -36,6 +36,7 @@ MIGRATIONS = [
     "canvas_snapshot.sql",
     "realtime_edges.sql",
     "idea_assessment.sql",
+    "telstra_design.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
