@@ -14,6 +14,7 @@ import {
   isToolNode,
 } from "@/lib/types";
 import EnvPanel from "./workspace/EnvPanel";
+import MicButton from "./MicButton";
 import {
   sendChat,
   streamChat,
@@ -1032,6 +1033,13 @@ export default function ChatWindow({
                 <span className={`w-1.5 h-1.5 rounded-full ${useStream ? "bg-accent" : "bg-white/30"}`} />
                 Live stream
               </button>
+              <MicButton
+                disabled={!!pendingCalls}
+                onText={(t) => {
+                  onChatChange((prev) => ({ ...prev, draft: prev.draft.trim() ? `${prev.draft.trimEnd()} ${t}` : t }));
+                  inputRef.current?.focus();
+                }}
+              />
               {busy && !pendingCalls ? (
                 <button
                   onClick={stop}

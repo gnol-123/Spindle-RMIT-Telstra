@@ -241,6 +241,16 @@ export async function renameProject(projectId: string, name: string) {
   return request<Project>(`/projects/${projectId}`, { method: "PATCH", auth: true, body: { name } });
 }
 
+// Voice prompt to cleaned up text (Gemini). Raw audio body.
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const res = await authedFetch("/chat/transcribe", {
+    method: "POST",
+    headers: { "Content-Type": blob.type },
+    body: blob,
+  });
+  return ((await res.json()) as { text: string }).text;
+}
+
 // Card preview of the canvas, raw image bytes.
 export async function uploadCanvasSnapshot(projectId: string, blob: Blob): Promise<void> {
   await authedFetch(`/projects/${projectId}/canvas-snapshot`, {

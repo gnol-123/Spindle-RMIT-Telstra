@@ -15,6 +15,7 @@ import {
 import { Project, User } from "@/lib/types";
 import { Brand, BrandLockup } from "./Brand";
 import SpindleAnim from "./SpindleAnim";
+import MicButton from "./MicButton";
 
 const SAMPLES = ["Finance tracker", "Build me a finance tracker", "Recipe box", "Make a habit app with streaks"];
 const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
@@ -297,6 +298,14 @@ export default function ProjectsScreen({
                 onChange={(e) => handleChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 className="flex-1 min-w-0 h-[68px] resize-none bg-transparent border-0 outline-none p-0 text-[15px] leading-[1.5] text-text caret-amber placeholder:text-[rgba(245,237,226,0.32)]"
+              />
+              <MicButton
+                className="self-end ml-2"
+                disabled={pending}
+                onText={(t) => {
+                  handleChange(text.trim() ? `${text.trimEnd()} ${t}` : t);
+                  taRef.current?.focus();
+                }}
               />
             </div>
           </div>
