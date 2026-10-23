@@ -2,11 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { loadAuth, saveAuth } from "@/lib/auth";
-import { completeOAuth, getMe } from "@/lib/api";
+import { completeOAuth, getMe, listProjects } from "@/lib/api";
 import { Project } from "@/lib/types";
 import LoginScreen from "@/components/LoginScreen";
 import ProjectsScreen from "@/components/ProjectsScreen";
 import MeshCanvas from "@/components/MeshCanvas";
+
+// ?project=<id> keeps the open project across refresh and back/forward.
+async function projectFromUrl(): Promise<Project | null> {
+  const id = new URLSearchParams(window.location.search).get("project");
+  if (!id) return null;
+  const project = (await listProjects().catch(() => [] as Project[])).find((p) => p.id === id);
+  if (!project) window.history.replaceState({}, "", window.location.pathname);
+  return project ?? null;
+}
 
 export default function Home() {
   const [checkedAuth, setCheckedAuth] = useState(false);
@@ -54,10 +63,27 @@ export default function Home() {
     }
     // Confirm the stored token still works rather than trusting it blindly.
     getMe()
-      .then(() => setLoggedIn(true))
+      .then(async () => {
+        const project = await projectFromUrl();
+        if (project) setActive({ project });
+        setLoggedIn(true);
+      })
       .catch(() => setLoggedIn(false))
       .finally(() => setCheckedAuth(true));
+
+    const onPop = () => projectFromUrl().then((project) => setActive(project ? { project } : null));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  const openProject = (project: Project, focusNodeId?: string, initialPrompt?: string) => {
+    window.history.pushState({}, "", `?project=${encodeURIComponent(project.id)}`);
+    setActive({ project, focusNodeId, initialPrompt });
+  };
+  const closeProject = () => {
+    window.history.pushState({}, "", window.location.pathname);
+    setActive(null);
+  };
 
   if (!checkedAuth) {
     return <div className="h-screen flex items-center justify-center text-muted text-sm bg-bg">Loading…</div>;
@@ -85,7 +111,7 @@ export default function Home() {
     return (
       <>
         {banner}
-        <ProjectsScreen onOpen={(project, focusNodeId, initialPrompt) => setActive({ project, focusNodeId, initialPrompt })} onLoggedOut={() => setLoggedIn(false)} />
+        <ProjectsScreen onOpen={openProject} onLoggedOut={() => setLoggedIn(false)} />
       </>
     );
   }
@@ -93,7 +119,7 @@ export default function Home() {
   return (
     <>
       {banner}
-      <MeshCanvas project={active.project} focusNodeId={active.focusNodeId} initialPrompt={active.initialPrompt} onBack={() => setActive(null)} />
+      <MeshCanvas project={active.project} focusNodeId={active.focusNodeId} initialPrompt={active.initialPrompt} onBack={closeProject} />
     </>
   );
 }
