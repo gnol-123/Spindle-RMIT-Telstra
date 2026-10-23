@@ -641,15 +641,28 @@ def merge_previews(
     """Live registry rows (newest first) then unregistered listening ports.
 
     A registered port that stopped listening is dropped: dead previews don't show.
+    A re-run republishes on a new port, often under a new title; rows serving the
+    same folder and path are one page, so only the newest shows.
     """
     live_ports = {p.port for p in listening}
     registered_ports = {e.get("port") for e in registry}
+    folder_of = {
+        p.port: serving_directory(p) or (posixpath.normpath(p.cwd) if p.cwd else None)
+        for p in listening
+    }
 
     rows = []
+    seen: set[tuple[str, str]] = set()
     for e in reversed(registry):
         port = e["port"]
         if port not in live_ports:
             continue
+        folder = folder_of.get(port)
+        if folder:
+            page = (folder, e.get("path") or "/")
+            if page in seen:
+                continue
+            seen.add(page)
         rows.append(
             {
                 "id": str(port),

@@ -37,6 +37,7 @@ MIGRATIONS = [
     "realtime_edges.sql",
     "idea_assessment.sql",
     "telstra_design.sql",
+    "scope_report.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
