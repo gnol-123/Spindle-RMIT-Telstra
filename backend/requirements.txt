@@ -6,7 +6,6 @@ python-dotenv==1.2.3
 pydantic-ai-slim[google,mcp,openai]==2.32.1
 e2b==2.49.1
 supabase==2.31.0
-dbos==2.30.0
 httpx==0.28.1
 # >= 2026.10.19 drops the compromised eMudhra CAs (CVE-2026-111943)
 certifi==2026.10.19

@@ -33,8 +33,9 @@ from app.environments import e2b, lifecycle, workspace
 from app.environments.base import WORKSPACE_ROOT, EnvContext
 from app.repositories.environment_repo import EnvironmentRepository, EnvNode
 from app.routers.auth import get_current_user
-from app.routers.deps import EnvRepo, PreviewRepo
+from app.routers.deps import EnvRepo, PreviewRepo, TurnRepos
 from app.services.supabase import get_user_client
+from app.services.turns import resume_waiting
 
 logger = logging.getLogger(__name__)
 
@@ -286,15 +287,25 @@ async def get_environment(
 
 @router.patch("/{node_id}", response_model=EnvironmentNodeResponse)
 async def update_environment(
-    project_id: UUID, node_id: UUID, req: UpdateEnvironmentRequest, env_repo: EnvRepo
+    project_id: UUID,
+    node_id: UUID,
+    req: UpdateEnvironmentRequest,
+    env_repo: EnvRepo,
+    turn_repos: TurnRepos,
 ) -> EnvironmentNodeResponse:
-    """Rename, move, or change the approval policy. An empty body is a no-op."""
+    """Rename, move, or change the approval policy. An empty body is a no-op.
+
+    Setting auto resumes, detached, every turn parked on this environment's
+    calls once nothing it waits on still asks.
+    """
     await _load(project_id, node_id, env_repo)
     updated = await to_thread.run_sync(
         lambda: env_repo.update_environment_node(str(node_id), req.model_dump(exclude_none=True))
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment not found")
+    if req.tool_policy == "auto":
+        resume_waiting(turn_repos, env_id=updated.id)
     return EnvironmentNodeResponse.of(updated)
 
 

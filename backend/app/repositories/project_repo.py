@@ -125,9 +125,17 @@ class Message:
     sender_node_id: str | None = None
     # add_message returned an existing client_token row; nothing was inserted.
     replayed: bool = False
+    # Selected by RUN_COLUMNS reads only, never by list selects.
+    heartbeat_at: str | None = None
+    resume_count: int = 0
+    parent_message_id: str | None = None
+    # A user stop no live driver received yet. Recovery and the heartbeat honour it.
+    cancel_requested: bool = False
 
 
 _MESSAGE_COLUMNS = "id, role, content, seq, status, created_at, tool_calls, sender_node_id"
+# Plus what the recovery loop and run_agent rejoin compare on.
+RUN_COLUMNS = f"{_MESSAGE_COLUMNS}, heartbeat_at, resume_count, parent_message_id, cancel_requested"
 
 
 def _to_message(row: dict[str, Any]) -> Message:
@@ -140,6 +148,10 @@ def _to_message(row: dict[str, Any]) -> Message:
         created_at=row["created_at"],
         tool_calls=row.get("tool_calls") or [],
         sender_node_id=row.get("sender_node_id"),
+        heartbeat_at=row.get("heartbeat_at"),
+        resume_count=row.get("resume_count") or 0,
+        parent_message_id=row.get("parent_message_id"),
+        cancel_requested=bool(row.get("cancel_requested")),
     )
 
 
@@ -595,6 +607,29 @@ class ProjectRepository:
         ).data
         return {r["id"]: (r["project_id"], r["kind"]) for r in rows}
 
+    def get_tool_policy(self, node_id: str) -> str | None:
+        """One node's tool_policy, any kind. None when it is gone."""
+        rows = (
+            self._db.table("nodes")
+            .select("tool_policy")
+            .eq("id", node_id)
+            .eq("owner_id", self._user_id)
+            .limit(1)
+            .execute()
+        ).data
+        return rows[0]["tool_policy"] if rows else None
+
+    def tool_policies(self, node_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """node id -> (kind, tool_policy), one query. Missing ids dropped."""
+        rows = (
+            self._db.table("nodes")
+            .select("id, kind, tool_policy")
+            .in_("id", node_ids)
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        return {r["id"]: (r["kind"], r["tool_policy"]) for r in rows}
+
     def list_edges(self, project_id: str) -> list[Edge]:
         """Every edge on a project's canvas."""
         rows = (
@@ -811,22 +846,26 @@ class ProjectRepository:
     # -- messages -----------------------------------------------------------
 
     def list_messages(
-        self, conversation_id: str, limit: int = DEFAULT_HISTORY_LIMIT
+        self,
+        conversation_id: str,
+        limit: int = DEFAULT_HISTORY_LIMIT,
+        *,
+        before_seq: int | None = None,
     ) -> list[Message]:
         """Return the most recent ``limit`` messages, oldest first.
 
         Ordered descending then reversed: a plain ascending ``limit`` would
         return the *oldest* N and silently freeze context after N turns.
         """
-        rows = (
+        q = (
             self._db.table("messages")
             .select(_MESSAGE_COLUMNS)
             .eq("conversation_id", conversation_id)
             .eq("owner_id", self._user_id)
-            .order("seq", desc=True)
-            .limit(limit)
-            .execute()
-        ).data
+        )
+        if before_seq is not None:
+            q = q.lt("seq", before_seq)
+        rows = q.order("seq", desc=True).limit(limit).execute().data
         return [_to_message(r) for r in reversed(rows)]
 
     def list_messages_after(
@@ -863,6 +902,7 @@ class ProjectRepository:
         error: str | None = None,
         sender_node_id: str | None = None,
         heartbeat_at: str | None = None,
+        parent_message_id: str | None = None,
     ) -> Message:
         """
         Insert one message, returning the stored row.
@@ -886,6 +926,7 @@ class ProjectRepository:
             ("error", error),
             ("sender_node_id", sender_node_id),
             ("heartbeat_at", heartbeat_at),
+            ("parent_message_id", parent_message_id),
         ):
             if value is not None:
                 payload[key] = value
@@ -894,14 +935,14 @@ class ProjectRepository:
             rows = self._db.table("messages").insert(payload).execute().data
         except APIError as exc:
             if exc.code == _UNIQUE_VIOLATION and client_token is not None:
-                existing = self._find_by_client_token(conversation_id, client_token)
+                existing = self.find_by_client_token(conversation_id, client_token)
                 if existing is not None:
                     return replace(existing, replayed=True)
             raise
 
         return _to_message(rows[0])
 
-    def _find_by_client_token(self, conversation_id: str, client_token: str) -> Message | None:
+    def find_by_client_token(self, conversation_id: str, client_token: str) -> Message | None:
         rows = (
             self._db.table("messages")
             .select(_MESSAGE_COLUMNS)
@@ -926,6 +967,8 @@ class ProjectRepository:
         "cache_read_tokens",
         "cache_write_tokens",
         "requests",
+        "resume_count",
+        "parent_message_id",
     }
 
     def update_message(self, message_id: str, **fields: Any) -> Message:
@@ -940,10 +983,131 @@ class ProjectRepository:
         ).data
         return _to_message(rows[0])
 
-    def latest_message_with_status(self, conversation_id: str, status: str) -> Message | None:
+    def claim_message(
+        self, message_id: str, seen_heartbeat_at: str | None, **fields: Any
+    ) -> Message | None:
+        """Compare-and-set on a running row: lands only if the heartbeat is still the
+        one the caller read. None = another instance got there first."""
+        payload = {k: v for k, v in fields.items() if k in self._UPDATABLE}
+        q = (
+            self._db.table("messages")
+            .update(payload)
+            .eq("id", message_id)
+            .eq("owner_id", self._user_id)
+            .eq("status", "running")
+        )
+        if seen_heartbeat_at is None:
+            q = q.is_("heartbeat_at", "null")
+        else:
+            q = q.eq("heartbeat_at", seen_heartbeat_at)
+        rows = q.execute().data
+        return _to_message(rows[0]) if rows else None
+
+    def request_cancel(self, message_id: str) -> Message | None:
+        """Flag a running row for whichever backend drives or resumes it. None = not running."""
         rows = (
             self._db.table("messages")
-            .select(_MESSAGE_COLUMNS)
+            .update({"cancel_requested": True})
+            .eq("id", message_id)
+            .eq("owner_id", self._user_id)
+            .eq("status", "running")
+            .execute()
+        ).data
+        return _to_message(rows[0]) if rows else None
+
+    def get_run_message(self, message_id: str) -> Message | None:
+        rows = (
+            self._db.table("messages")
+            .select(RUN_COLUMNS)
+            .eq("id", message_id)
+            .eq("owner_id", self._user_id)
+            .limit(1)
+            .execute()
+        ).data
+        return _to_message(rows[0]) if rows else None
+
+    def latest_reply_to(self, conversation_id: str, user_seq: int) -> Message | None:
+        """Newest assistant row answering one user row, i.e. before the next user row.
+
+        A retry after a failed reply appends a second assistant row, not a user row.
+        ponytail: scans 20 rows, plenty under the resume cap; widen if retries grow.
+        """
+        rows = (
+            self._db.table("messages")
+            .select(RUN_COLUMNS)
+            .eq("conversation_id", conversation_id)
+            .eq("owner_id", self._user_id)
+            .gt("seq", user_seq)
+            .order("seq")
+            .limit(20)
+            .execute()
+        ).data
+        reply = None
+        for r in rows:
+            if r["role"] == "user":
+                break
+            if r["role"] == "assistant":
+                reply = r
+        return _to_message(reply) if reply else None
+
+    # -- checkpoints ------------------------------------------------------------
+
+    def save_checkpoint(
+        self,
+        message_id: str,
+        history: Any,
+        content_len: int,
+        events_len: int,
+        *,
+        clear_approvals: bool = False,
+    ) -> None:
+        row = {
+            "message_id": message_id,
+            "owner_id": self._user_id,
+            "history": history,
+            "content_len": content_len,
+            "events_len": events_len,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        if clear_approvals:
+            row["approvals"] = None
+        self._db.table("turn_checkpoints").upsert(row, on_conflict="message_id").execute()
+
+    def set_approvals(self, message_id: str, approvals: dict[str, bool]) -> None:
+        """On the message's checkpoint, if it has one."""
+        (
+            self._db.table("turn_checkpoints")
+            .update({"approvals": approvals})
+            .eq("message_id", message_id)
+            .eq("owner_id", self._user_id)
+            .execute()
+        )
+
+    def get_checkpoint(self, message_id: str) -> dict[str, Any] | None:
+        rows = (
+            self._db.table("turn_checkpoints")
+            .select("history, content_len, events_len, approvals")
+            .eq("message_id", message_id)
+            .eq("owner_id", self._user_id)
+            .limit(1)
+            .execute()
+        ).data
+        return rows[0] if rows else None
+
+    def clear_checkpoint(self, message_id: str) -> None:
+        (
+            self._db.table("turn_checkpoints")
+            .delete()
+            .eq("message_id", message_id)
+            .eq("owner_id", self._user_id)
+            .execute()
+        )
+
+    def latest_message_with_status(self, conversation_id: str, status: str) -> Message | None:
+        # "*": the durability columns when durability.sql is applied, no error when not.
+        rows = (
+            self._db.table("messages")
+            .select("*")
             .eq("conversation_id", conversation_id)
             .eq("owner_id", self._user_id)
             .eq("status", status)

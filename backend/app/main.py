@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -6,8 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import auth, chat, environments, health, oauth, projects
-from app.services.dbos_app import setup_dbos
-from app.services.runs import join_detached
+from app.services.runs import hand_off, join_detached
 from app.tools.mcp.base import close_pool
 
 log = logging.getLogger(__name__)
@@ -51,11 +51,16 @@ app.include_router(environments.router)
 app.include_router(chat.router)
 app.include_router(oauth.router)
 
-# Must come after routers are registered so DBOS can instrument them.
-setup_dbos(app)
+
+_recovery_task: asyncio.Task | None = None
 
 
 async def _join_detached_turns() -> None:
+    if _recovery_task is not None:
+        _recovery_task.cancel()
+    if settings.supabase_service_key:
+        # The next instance's recovery loop resumes them; waiting would only delay that.
+        await hand_off(settings.detached_join_timeout_s)
     await join_detached(settings.detached_join_timeout_s)
 
 
@@ -65,7 +70,7 @@ app.add_event_handler("shutdown", close_pool)
 
 
 async def _sweep_stale_turns() -> None:
-    """Repair rows a previous process left `running` on a hard restart."""
+    """Repair tool_calls and nodes a previous process left `running` on a hard restart."""
     if not settings.supabase_service_key:
         return
     from anyio import to_thread
@@ -86,6 +91,20 @@ async def _sweep_stale_turns() -> None:
 
 
 app.add_event_handler("startup", _sweep_stale_turns)
+
+
+async def _start_recovery() -> None:
+    """Resume turns a previous or departing instance left running. A loop, not a
+    startup check: Railway starts this instance before the old one stops."""
+    global _recovery_task
+    if not settings.supabase_service_key:
+        return
+    from app.services.recovery import recovery_loop
+
+    _recovery_task = asyncio.ensure_future(recovery_loop())
+
+
+app.add_event_handler("startup", _start_recovery)
 
 
 @app.get("/")

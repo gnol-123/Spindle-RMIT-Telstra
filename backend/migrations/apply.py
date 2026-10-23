@@ -38,6 +38,7 @@ MIGRATIONS = [
     "idea_assessment.sql",
     "telstra_design.sql",
     "scope_report.sql",
+    "durability.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
@@ -53,6 +54,7 @@ EXPECTED_TABLES = [
     "tool_calls",
     "tool_presets",
     "tool_types",
+    "turn_checkpoints",
 ]
 
 

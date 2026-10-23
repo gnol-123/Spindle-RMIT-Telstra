@@ -10,7 +10,8 @@ DB flag polled by the driver if the backend ever scales out.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -44,14 +45,57 @@ class RunningTurn:
     events: list[dict] = field(default_factory=list)
     subscribers: set[MemoryObjectSendStream] = field(default_factory=set)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    dbos_workflow_id: str | None = None
     children: "set[RunningTurn]" = field(default_factory=set)
     cancel_requested: bool = False
     result: "AgentTurn | None" = None
     final: tuple[str, dict] | None = None
+    # The turn's ProjectRepository, for the shutdown handoff write.
+    repo: Any = None
 
 
 _RUNS: dict[str, RunningTurn] = {}
+
+# Set at shutdown: a cancelled turn leaves its row running for the next instance.
+_handing_off = False
+
+# Heartbeat written on handoff, so the next instance's poll claims at once.
+_EPOCH = "1970-01-01T00:00:00+00:00"
+
+
+def stale_after_s() -> float:
+    """At least 3 missed heartbeats, and past the shutdown join window."""
+    from app.config import settings
+
+    return max(settings.detached_join_timeout_s + 30, 90)
+
+
+def _cutoff(stale_s: float) -> str:
+    # Z suffix: a "+" would need quoting in or_.
+    return (datetime.now(UTC) - timedelta(seconds=stale_s)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def stale_filter() -> str:
+    """PostgREST or_ for a running row whose heartbeat (or created_at) is stale."""
+    cutoff = _cutoff(stale_after_s())
+    return f"heartbeat_at.lt.{cutoff},and(heartbeat_at.is.null,created_at.lt.{cutoff})"
+
+
+def is_stale(message: Message) -> bool:
+    """Same rule as stale_filter, for one row already read."""
+    beat = datetime.fromisoformat(message.heartbeat_at or message.created_at)
+    return beat < datetime.now(UTC) - timedelta(seconds=stale_after_s())
+
+
+def handed_off(message: Message) -> bool:
+    """Left by a clean shutdown, not a crash."""
+    return message.heartbeat_at is not None and datetime.fromisoformat(
+        message.heartbeat_at
+    ) == datetime.fromisoformat(_EPOCH)
+
+
+def handing_off() -> bool:
+    return _handing_off
+
 
 # Shielded finalise tasks. Strong refs: asyncio holds only weak ones, and
 # nobody awaits a finaliser. Shutdown must not race the last write.
@@ -76,6 +120,10 @@ def unregister(conversation_id: str) -> None:
 
 def get(conversation_id: str) -> RunningTurn | None:
     return _RUNS.get(conversation_id)
+
+
+def conversation_ids() -> list[str]:
+    return list(_RUNS)
 
 
 def running_in_project(project_id: str) -> list[RunningTurn]:
@@ -128,38 +176,27 @@ async def close(run: RunningTurn, event: str, payload: dict) -> None:
 
 
 def sweep_stale(client, *, min_age_s: float) -> dict[str, int]:
-    """Repair rows a dead process left mid-turn, on backend startup.
+    """Repair tool_calls and nodes a dead process left mid-turn, on backend startup.
 
-    A running message is dead once its heartbeat (``created_at`` before the
-    first beat) is older than the cutoff. The live driver beats every 20s, so
-    another backend's long turn on the same DB is left alone.
+    Running messages are not touched: the recovery loop resumes them, so their
+    tool calls re-run and their nodes go back to running there.
 
     ponytail: heartbeat_at is stamped by each backend's own clock; skew between
     replicas eats into the 90s floor. Use a DB-side now() via RPC if it bites.
     """
-    from datetime import UTC, datetime, timedelta
-
-    # At least 3 missed heartbeats. Z suffix: a "+" would need quoting in or_.
-    stale_s = max(min_age_s, 90)
-    cutoff = (datetime.now(UTC) - timedelta(seconds=stale_s)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    # At least 3 missed heartbeats.
+    cutoff = _cutoff(max(min_age_s, 90))
     counts = {}
-    counts["messages"] = len(
+    # Live somewhere, or waiting to be resumed.
+    running = (
         client.table("messages")
-        .update({"status": "failed", "error": "backend restarted"})
+        .select("conversation_id, conversations(node_id)")
         .eq("status", "running")
-        .or_(f"heartbeat_at.lt.{cutoff},and(heartbeat_at.is.null,created_at.lt.{cutoff})")
         .execute()
         .data
     )
-    # Whatever still runs after the sweep above is live somewhere.
-    live = {
-        r["conversation_id"]
-        for r in client.table("messages")
-        .select("conversation_id")
-        .eq("status", "running")
-        .execute()
-        .data
-    }
+    live = {r["conversation_id"] for r in running}
+    live_nodes = {(r.get("conversations") or {}).get("node_id") for r in running} - {None}
     # tool_calls has no message_id: a running call is dead when its
     # conversation has no live running message.
     # ponytail: live ids go in the URL; fine for tens of concurrent turns.
@@ -173,16 +210,63 @@ def sweep_stale(client, *, min_age_s: float) -> dict[str, int]:
         q = q.not_.in_("conversation_id", sorted(live))
     counts["tool_calls"] = len(q.execute().data)
     # The heartbeat re-touches its node, so only abandoned ones are this old.
-    counts["nodes"] = len(
+    q = (
         client.table("nodes")
         .update({"status": "ready"})
         .eq("kind", "agent")
         .eq("status", "running")
         .lt("updated_at", cutoff)
-        .execute()
-        .data
     )
+    if live_nodes:
+        q = q.not_.in_("id", sorted(live_nodes))
+    counts["nodes"] = len(q.execute().data)
     return counts
+
+
+async def hand_off(timeout: float) -> int:
+    """Shutdown: stop live turns without finalising, for the next instance to resume.
+
+    Cancelled before the write, so no beat or flush lands after the stale
+    heartbeat. A user cancel already in flight still finalises. Returns how
+    many were handed off.
+    """
+    from anyio import to_thread
+
+    global _handing_off
+    _handing_off = True
+    live = [
+        r
+        for r in _RUNS.values()
+        if r.task is not None and not r.task.done() and not r.cancel_requested
+    ]
+    if not live:
+        return 0
+    for r in live:
+        r.task.cancel()
+    # Shielded tails too: a pause still parking must land before, not after, the stale beat.
+    await asyncio.wait(
+        [r.task for r in live] + [t for t in _FINALISERS if not t.done()], timeout=timeout
+    )
+
+    def release(r: RunningTurn) -> None:
+        r.repo.update_message(
+            r.message.id, content="".join(r.text), tool_calls=list(r.events), heartbeat_at=_EPOCH
+        )
+
+    results = await asyncio.gather(
+        *(
+            to_thread.run_sync(release, r)
+            for r in live
+            # final set: its tail finalised the row, nothing to hand off.
+            if r.message is not None and r.repo and r.final is None
+        ),
+        return_exceptions=True,
+    )
+    for exc in results:
+        if isinstance(exc, BaseException):
+            log.error("handoff write failed: %r", exc)
+    log.info("handed off %d turn(s)", len(live))
+    return len(live)
 
 
 async def join_detached(timeout: float) -> int:

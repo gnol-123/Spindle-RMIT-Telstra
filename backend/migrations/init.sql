@@ -3,8 +3,6 @@
 -- A project is a canvas of nodes (boxes) joined by edges (arrows), in the
 -- Nodes are heterogeneous: agents, execution environments, 
 -- and tools. Agent nodes each hold a conversation.
---
--- Does not touch the `dbos` schema, which DBOS manages for itself.
 
 begin;
 

@@ -9,19 +9,28 @@ The turn repositories bypass RLS, so that read is the tenant boundary.
 
 import json
 import logging
+from collections.abc import Callable
 
 import anyio
 from anyio import to_thread
-from pydantic_ai.toolsets import ApprovalRequiredToolset, FunctionToolset
+from pydantic_ai import RunContext
+from pydantic_ai.toolsets import FunctionToolset
 
-from app.repositories.project_repo import DuplicateEdge, Node
+from app.repositories.project_repo import DuplicateEdge, Message, Node
 from app.repositories.tool_repo import ToolNode
 from app.routers.deps import TurnRepositories
 from app.routers.projects import provision_agent
-from app.services import runs
+from app.services import recovery, runs
 from app.services.turns import prepare_turn
-from app.tools.assembly import AssembledTools
-from app.workflows import cancel_for_node, refresh_edge, refresh_outbound, run_turn
+from app.tools.assembly import AssembledTools, LivePolicyToolset
+from app.workflows import (
+    ChatTurn,
+    await_turn,
+    cancel_for_node,
+    refresh_edge,
+    refresh_outbound,
+    run_turn,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +59,10 @@ _REPLY_HEAD = 12000
 # Bound on waiting for a freshly provisioned evaluator's tools to verify
 _TOOL_WAIT_TIMEOUT_S = 20
 _TOOL_WAIT_POLL_S = 0.5
+# Rejoining a child another process left running: it stops beating with the
+# parent, so it goes stale at most one beat after the parent did.
+_REJOIN_SLACK_S = 20
+_REJOIN_POLL_S = 5
 
 UNATTENDED_INSTRUCTION = (
     "You are being run by an orchestrator with no human in the loop. Do not ask "
@@ -63,6 +76,13 @@ def _is_stale(edge, source_head: int) -> bool:
     if edge.summarised_through_seq is None:
         return True
     return source_head > edge.summarised_through_seq
+
+
+def _reply_of(message: Message) -> str:
+    """A finished row's final answer: the text after its last tool event, as
+    a live run's output would be."""
+    offsets = [e["offset"] for e in message.tool_calls if isinstance(e.get("offset"), int)]
+    return message.content[max(offsets) :] if offsets else message.content
 
 
 def _user_env_config() -> dict:
@@ -337,7 +357,7 @@ class CanvasTools:
             shared.append(env.name)
         return shared
 
-    async def run_agent(self, node_id: str, prompt: str) -> str:
+    async def run_agent(self, node_id: str, prompt: str, *, client_token: str | None = None) -> str:
         """Send prompt to an agent and wait for its reply. The agent runs unattended
         with its own tools and receives the context summaries wired into it.
         Returns the reply (head only if long). Afterwards its outbound context
@@ -350,55 +370,155 @@ class CanvasTools:
             return f"Refused: agent {node_id} not found on this canvas."
         if target.agent_type_id == self._orch.agent_type_id:
             return "Refused: an orchestrator cannot run another orchestrator."
-        return await self._run(target, prompt)
+        return await self._run(target, prompt, client_token=client_token)
 
-    async def _run(self, target: Node, prompt: str, *, refresh: bool = True) -> str:
+    async def _run_agent_tool(self, ctx: RunContext, node_id: str, prompt: str) -> str:
+        # One child turn per tool call: a resumed orchestrator re-running this
+        # call finds the child it already started. Scoped to the orchestrator's
+        # row (stable across resumes): some providers reuse ids like call_0.
+        orch = runs.get(self._orch_conversation_id)
+        row_id = orch.message.id if orch is not None and orch.message is not None else None
+        token = f"run_agent:{row_id}:{ctx.tool_call_id}" if row_id and ctx.tool_call_id else None
+        return await self.run_agent(node_id, prompt, client_token=token)
+
+    _run_agent_tool.__doc__ = run_agent.__doc__
+
+    async def _inputs(self, target: Node, conversation_id: str) -> tuple[str, list]:
+        prepared = await prepare_turn(self._repos, target, conversation_id, nested=True)
+        instructions = "\n\n".join(p for p in (UNATTENDED_INSTRUCTION, prepared.instructions) if p)
+        return instructions, prepared.toolsets
+
+    async def _rejoin(self, target: Node, conversation_id: str, user) -> ChatTurn | str | None:
+        """The child turn a previous attempt of this call started. None = run it fresh.
+
+        Not live here and still beating: its old process is dying, so wait for
+        the beat to go stale, then claim and resume it under this run.
+        """
+        repo = self._repos.project
+        parent = runs.get(self._orch_conversation_id)
+        deadline = anyio.current_time() + runs.stale_after_s() + _REJOIN_SLACK_S
+        while True:
+            row = await to_thread.run_sync(repo.latest_reply_to, conversation_id, user.seq)
+            # Cancelled stays cancelled: the user stopped it.
+            if row is None or row.status == "failed":
+                return None
+            if row.status != "running":
+                return ChatTurn(conversation_id, user, row, output=_reply_of(row))
+            live = runs.get(conversation_id)
+            if live is not None:
+                if live.message is None or live.message.id != row.id:
+                    return f"Refused: {target.name} is already running a turn."
+                return await await_turn(live, parent=parent)
+            if runs.is_stale(row):
+                if row.cancel_requested:
+                    await to_thread.run_sync(
+                        lambda row=row: recovery.fail(
+                            self._repos, row, conversation_id, target.id, None, status="cancelled"
+                        )
+                    )
+                    continue
+                if row.resume_count >= recovery.MAX_RESUMES:
+                    await to_thread.run_sync(
+                        lambda row=row: recovery.fail(
+                            self._repos, row, conversation_id, target.id, "could not resume"
+                        )
+                    )
+                    return f"Agent failed: {target.name}: could not resume its turn."
+                claimed = await to_thread.run_sync(lambda row=row: recovery.claim(repo, row))
+                if claimed is not None:
+                    return await self._resume_child(target, conversation_id, claimed, parent)
+            if anyio.current_time() >= deadline:
+                return f"Agent failed: {target.name}: still running on another backend."
+            await anyio.sleep(_REJOIN_POLL_S)
+
+    async def _resume_child(
+        self, target: Node, conversation_id: str, claimed, parent
+    ) -> ChatTurn | str:
+        try:
+            resume = await to_thread.run_sync(
+                lambda: recovery.build_resume(self._repos, claimed, conversation_id)
+            )
+        except LookupError:
+            log.exception("canvas: cannot resume %s", claimed.id)
+            await to_thread.run_sync(
+                lambda: recovery.fail(
+                    self._repos, claimed, conversation_id, target.id, "could not resume"
+                )
+            )
+            return f"Agent failed: {target.name}: could not resume its turn."
+        instructions, toolsets = await self._inputs(target, conversation_id)
+        log.info("canvas: %s rejoining %s", self._orch.id, target.id)
+        return await run_turn(
+            self._repos.project,
+            conversation_id,
+            target.system_prompt,
+            target.model,
+            None,
+            node_id=target.id,
+            project_id=target.project_id,
+            tool_repo=self._repos.tool,
+            instructions=instructions,
+            toolsets=toolsets,
+            parent=parent,
+            request_limit=target.request_limit,
+            resume=resume,
+        )
+
+    async def _run(
+        self, target: Node, prompt: str, *, refresh: bool = True, client_token: str | None = None
+    ) -> str:
         """Run one turn on target and return its reply. Shared by run_agent and evaluate."""
         repo, tool_repo = self._repos.project, self._repos.tool
         conversation_id = target.conversation_id or await to_thread.run_sync(
             lambda: repo.get_or_create_conversation(target.id, target.project_id)
         )
-        if await to_thread.run_sync(tool_repo.get_pending_run, conversation_id):
-            return (
-                f"Refused: {target.name} is waiting for a tool approval in its own chat. "
-                "Resolve that first."
-            )
-
-        prepared = await prepare_turn(self._repos, target, conversation_id, nested=True)
-        instructions = "\n\n".join(p for p in (UNATTENDED_INSTRUCTION, prepared.instructions) if p)
-
-        log.info("canvas: %s running %s", self._orch.id, target.id)
-        parent = runs.get(self._orch_conversation_id)
+        turn: ChatTurn | str | None = None
         try:
-            turn = await run_turn(
-                repo,
-                conversation_id,
-                target.system_prompt,
-                target.model,
-                prompt,
-                node_id=target.id,
-                project_id=target.project_id,
-                tool_repo=tool_repo,
-                durable=False,
-                instructions=instructions,
-                toolsets=prepared.toolsets,
-                parent=parent,
-                sender_node_id=self._orch.id,
-                request_limit=target.request_limit,
-            )
+            if client_token is not None:
+                user = await to_thread.run_sync(
+                    repo.find_by_client_token, conversation_id, client_token
+                )
+                if user is not None:
+                    turn = await self._rejoin(target, conversation_id, user)
+            if isinstance(turn, str):
+                return turn
+            if turn is None:
+                if await to_thread.run_sync(tool_repo.get_pending_run, conversation_id):
+                    return (
+                        f"Refused: {target.name} is waiting for a tool approval in its own chat. "
+                        "Resolve that first."
+                    )
+                instructions, toolsets = await self._inputs(target, conversation_id)
+                log.info("canvas: %s running %s", self._orch.id, target.id)
+                # A replayed client_token reuses the user row; start_turn adds the reply.
+                turn = await run_turn(
+                    repo,
+                    conversation_id,
+                    target.system_prompt,
+                    target.model,
+                    prompt,
+                    node_id=target.id,
+                    project_id=target.project_id,
+                    tool_repo=tool_repo,
+                    client_token=client_token,
+                    instructions=instructions,
+                    toolsets=toolsets,
+                    parent=runs.get(self._orch_conversation_id),
+                    sender_node_id=self._orch.id,
+                    request_limit=target.request_limit,
+                )
         except runs.TurnBusy:
             return f"Refused: {target.name} is already running a turn."
 
-        if turn.assistant_message is not None and turn.assistant_message.status == "cancelled":
+        status = turn.assistant_message.status if turn.assistant_message is not None else None
+        if status == "cancelled":
             return f"Cancelled by user: {target.name}. Its partial reply is on its conversation."
-        if turn.pending is not None:
+        if turn.pending is not None or status == "awaiting_approval":
             return (
                 f"{target.name} paused for a tool approval and cannot be driven unattended. "
                 "Set its tool_policy to auto, or approve it in its own chat, then run it again."
             )
-        if turn.error is not None or (
-            turn.assistant_message is not None and turn.assistant_message.status == "failed"
-        ):
+        if turn.error is not None or status == "failed":
             return f"Agent failed: {target.name}: {turn.error}"
 
         note = ""
@@ -538,7 +658,8 @@ class CanvasTools:
         # Sequential: placement and the duplicate guard read before they write.
         toolset = FunctionToolset(sequential=True)
         for name in TOOL_NAMES:
-            toolset.add_function(getattr(self, name), name=name)
+            func = self._run_agent_tool if name == "run_agent" else getattr(self, name)
+            toolset.add_function(func, name=name)
         return toolset
 
 
@@ -548,13 +669,15 @@ async def assemble_canvas(
     nodes: list[ToolNode],
     conversation_id: str,
     *,
-    ask: bool,
+    policy: Callable[[], str | None],
+    start: str | None = None,
 ) -> AssembledTools:
     """One canvas toolset for the turn. A second canvas box is reported unavailable.
 
-    ``ask`` gates run_agent and evaluate: creating and wiring boxes is cheap and
-    reversible, running an agent is the step that spends. refresh_context is
-    on the cheap side too, a summariser call over one transcript, and gating
+    The orchestrator's ``policy``, read per call, gates run_agent and evaluate:
+    creating and wiring boxes is cheap and reversible, running an agent is the
+    step that spends. refresh_context is on the cheap side too, a summariser
+    call over one transcript, and gating
     it would interrupt the pause/resume flow for bookkeeping the user has no
     reason to adjudicate. give_environment writes a row at status pending; the
     sandbox itself only starts on first use, inside a run_agent call that is
@@ -565,12 +688,12 @@ async def assemble_canvas(
         return AssembledTools(unavailable=[n.name for n in nodes])
     primary, extra = ready[0], [*ready[1:], *(n for n in nodes if n.status != "ready")]
 
-    toolset = CanvasTools(repos, orchestrator, conversation_id).toolset()
-    if ask:
-        toolset = ApprovalRequiredToolset(
-            toolset,
-            approval_required_func=lambda ctx, tool, args: tool.name in ("run_agent", "evaluate"),
-        )
+    toolset = LivePolicyToolset(
+        CanvasTools(repos, orchestrator, conversation_id).toolset(),
+        policy=policy,
+        only=frozenset({"run_agent", "evaluate"}),
+        start=start,
+    )
     return AssembledTools(
         toolsets=[toolset],
         owner_by_tool=dict.fromkeys(TOOL_NAMES, primary.id),
