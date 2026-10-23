@@ -2,20 +2,23 @@
 
 import asyncio
 import json
+import logging
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from anyio import to_thread
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from pydantic_ai import DeferredToolRequests
 
+from app.config import settings
 from app.repositories.project_repo import Message
+from app.routers.auth import CurrentAuth
 from app.routers.deps import ProjectRepo, TurnRepos
-from app.services import recovery, runs
+from app.services import recovery, runs, voice
 from app.services.turns import ResumeRefused, resume_paused, turn_setup
 from app.workflows import (
     attach_events,
@@ -24,6 +27,8 @@ from app.workflows import (
     run_turn,
     start_turn,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -312,3 +317,34 @@ async def chat_resume(
     except runs.TurnBusy:
         raise _BUSY from None
     return StreamingResponse(_events(run), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ~20 min of browser opus; under Gemini's 20 MB inline request cap.
+_MAX_VOICE_BYTES = 8_000_000
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def chat_transcribe(request: Request, _auth: CurrentAuth) -> TranscribeResponse:
+    """Voice prompt to text. Raw audio body, its Content-Type passed to Gemini."""
+    if not settings.gemini_api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Voice input is not configured")
+    media_type = request.headers.get("content-type", "")
+    if not media_type.startswith("audio/"):
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Expected an audio body")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > _MAX_VOICE_BYTES:
+            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Recording is too long")
+    if not body:
+        return TranscribeResponse(text="")
+    try:
+        text = await voice.transcribe(bytes(body), media_type)
+    except Exception:
+        log.warning("transcribe failed", exc_info=True)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Transcription failed") from None
+    return TranscribeResponse(text=text)
