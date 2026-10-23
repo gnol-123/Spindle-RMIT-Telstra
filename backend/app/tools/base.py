@@ -33,7 +33,7 @@ class ToolContext:
     node_id: str
     name: str
     config: dict[str, Any]
-    # Decrypted. Not logged, not stored in DBOS, not sent to the frontend.
+    # Decrypted. Not logged, not persisted, not sent to the frontend.
     secrets: dict[str, str]
 
 

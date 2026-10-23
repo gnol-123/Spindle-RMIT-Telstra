@@ -7,11 +7,9 @@ including ``/health``, when the API key is unset.
 """
 
 from functools import lru_cache
-from hashlib import sha256
 
 import httpx2
 from pydantic_ai import Agent, DeferredToolRequests
-from pydantic_ai.durable_exec.dbos import DBOSDurability
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.google import GoogleModel
@@ -54,31 +52,14 @@ def get_agent_for(system_prompt: str, model: str) -> Agent[None, str | DeferredT
     approval instead of raising: without it, a deferred tool call makes
     pydantic-ai raise UserError rather than returning it as output. This is a
     constant added to every agent, so it does not change the cache key.
-
-    ``DBOSDurability`` routes model requests through DBOS steps when the run is
-    inside a workflow, and is transparent otherwise, so the same agent serves
-    installs with and without DBOS configured. ``name`` identifies its steps and
-    must be stable across restarts or a recovering workflow cannot find them.
     """
     return Agent(
         _model(model),
         system_prompt=system_prompt,
         output_type=[str, DeferredToolRequests],
-        name=_agent_name(system_prompt, model),
-        capabilities=[DBOSDurability()],
         # Default 1: a second bad-args call or MCP error on one tool ends the turn.
         retries={"tools": TOOL_RETRIES},
     )
-
-
-def _agent_name(system_prompt: str, model: str) -> str:
-    """Stable DBOS step-name prefix for one catalog entry.
-
-    Hashed, not the raw prompt: step names land in Postgres and the prompt is
-    unbounded text. Same inputs as the cache key, so one agent means one name.
-    """
-    digest = sha256(f"{model}\0{system_prompt}".encode()).hexdigest()[:16]
-    return f"agent_{digest}"
 
 
 def to_model_messages(history: list[Message]) -> list[ModelMessage]:

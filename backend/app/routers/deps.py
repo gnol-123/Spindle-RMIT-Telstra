@@ -77,13 +77,20 @@ def get_turn_repositories(auth: CurrentAuth) -> TurnRepositories:
     """
     global _warned_no_service_key
     if settings.supabase_service_key:
-        client = get_service_client()
-    else:
-        client = get_user_client(auth.token)
-        if not _warned_no_service_key:
-            log.warning("SUPABASE_SERVICE_KEY unset; long turns may fail when the token expires")
-            _warned_no_service_key = True
-    uid = auth.user.id
+        return service_turn_repositories(auth.user.id)
+    client = get_user_client(auth.token)
+    if not _warned_no_service_key:
+        log.warning("SUPABASE_SERVICE_KEY unset; long turns may fail when the token expires")
+        _warned_no_service_key = True
+    return _turn_repositories(client, auth.user.id)
+
+
+def service_turn_repositories(uid: str) -> TurnRepositories:
+    """Turn repositories for a user with no request in hand (recovery)."""
+    return _turn_repositories(get_service_client(), uid)
+
+
+def _turn_repositories(client, uid: str) -> TurnRepositories:
     return TurnRepositories(
         project=ProjectRepository(client, uid),
         tool=ToolRepository(client, uid),

@@ -17,7 +17,7 @@ creates, so run it second.
 | `orchestrator.sql` | Canvas tool type and preset, the orchestrator agent type and its prompt. Run tenth. |
 | `turns.sql` | Progressive turn persistence: status constraints, `messages.sender_node_id`, and realtime publication for nodes, messages, tool_calls. Run eleventh. |
 | `pitch.sql` | Scrutinizer and evaluator agent types, pitch scrutiny skill preset. Run twelfth. |
-| `runtime.sql` | `messages.heartbeat_at` for the startup sweep, per agent type `request_limit`. Run thirteenth. |
+| `runtime.sql` | `messages.heartbeat_at` for stale turn detection, per agent type `request_limit`. Run thirteenth. |
 | `design_skills.sql` | Design Taste, Impeccable and Emil Design Engineering skill presets, wired onto UX/UI and Scrutinizer. Run fourteenth. |
 | `previews.sql` | `previews` table with RLS (agent-published previews, thumbnail path) and the private `project-previews` bucket. Run fifteenth. |
 | `canvas_snapshot.sql` | `projects.canvas_snapshot_at`, set when a canvas screenshot is uploaded. Run sixteenth. |
@@ -25,6 +25,7 @@ creates, so run it second.
 | `idea_assessment.sql` | Market Sizing, DVF Assessment and Visual Report skills; new Market Research prompt and defaults, backfilled. Run eighteenth. |
 | `telstra_design.sql` | Telstra Design skill and prompt for the UX/UI agent, backfilled. Run nineteenth. |
 | `scope_report.sql` | Scope Report skill, reworked Scoping Brief, new Project Scoping prompt and defaults, backfilled. Run twentieth. |
+| `durability.sql` | `messages.parent_message_id`, `resume_count` and `cancel_requested`, and the service-only `turn_checkpoints` table (history plus replayed approvals) for resuming turns after a redeploy. Run twenty-first. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying
@@ -162,7 +163,7 @@ values ('github', 'GitHub', 'Read and write repositories.',
 
 ## Notes
 
-- Everything lives in `public`. The `dbos` schema belongs to DBOS: leave it be.
+- Everything lives in `public`.
 - **Tool credentials are stored in plain text** in `node_secrets` today. They
   are isolated by RLS and kept out of the `nodes` row so a `select *` cannot
   leak them, but encryption at rest (pgsodium / Supabase Vault) is still an

@@ -68,7 +68,7 @@ Settings are defined in `app/config.py` and read from environment variables, fal
 | `GEMINI_MODEL` | `gemini-3-flash-preview` | Model ID used by the agent |
 | `SUPABASE_URL` | _(empty)_ | Supabase project URL |
 | `SUPABASE_KEY` | _(empty)_ | Publishable key. RLS applies |
-| `DBOS_DATABASE_URL` | _(empty)_ | Postgres URL for DBOS checkpoints. Unset disables durability |
+| `DBOS_DATABASE_URL` | _(empty)_ | Postgres URL, used only by `migrations/apply.py` |
 | `OAUTH_REDIRECT_URL` | _(empty)_ | Where Supabase returns the browser after Google sign-in |
 | `SUPABASE_SERVICE_KEY` | _(empty)_ | Supabase `service_role` key. **Bypasses RLS entirely.** Used at exactly one call site, decrypting tool secrets from Supabase Vault. Must never reach the frontend |
 

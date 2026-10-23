@@ -1,22 +1,12 @@
-"""Turn orchestration, with the LLM call optionally checkpointed by DBOS.
-
-Only the pure LLM call goes inside a DBOS step. Persistence stays outside it:
-DBOS serialises step arguments to Postgres, so a Supabase client cannot be
-pickled and a JWT would be a credential written to disk.
-
-``run_agent_step`` writes nothing. The user row lands before it and the
-assistant row after, so its retries cannot produce duplicate rows.
-"""
+"""Turn orchestration: runs the agent and persists the user and assistant rows."""
 
 import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from uuid import uuid4
 
 import anyio
-from dbos import DBOS
 from pydantic_ai import DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import UsageLimits
@@ -40,8 +30,36 @@ log = logging.getLogger(__name__)
 _ARGS_MAX = 2000
 # Progressive writes are throttled: each is an HTTP round trip to PostgREST.
 _FLUSH_INTERVAL_S = 1.5
-# Live-turn heartbeat. runs.sweep_stale treats 90s without one as dead.
+# Live-turn heartbeat. runs.stale_after_s (90s) without one reads as dead.
 _HEARTBEAT_S = 20
+
+
+def _checkpoint_hook(send):
+    """after_node_run: queue the full history behind the node's own events.
+
+    Same stream as the events, so the driver writes it with the bubble exactly
+    at this point. pydantic-ai appends a request when its node starts, so a
+    pending one (tool returns, the prompt) rides on ``result``.
+    """
+    from pydantic_ai import ModelRequestNode, UserPromptNode
+    from pydantic_ai.messages import ModelResponse
+
+    async def hook(ctx, *, node, result):
+        history = list(ctx.messages)
+        # Empty parts: a placeholder for resuming a suspended response, not a request.
+        pending = result.request if isinstance(result, ModelRequestNode) else None
+        if pending is not None and pending.parts and (not history or history[-1] is not pending):
+            history.append(pending)
+        last = history[-1] if history else None
+        # A final answer: finalise is next, and resuming it would ask the model again.
+        if isinstance(last, ModelResponse) and not last.tool_calls:
+            return result
+        # Past the first node the run has moved on from the calls a resume's approvals answer.
+        keep = isinstance(node, UserPromptNode)
+        await send.send(("checkpoint", {"history": history, "keep_approvals": keep}))
+        return result
+
+    return hook
 
 
 @dataclass
@@ -168,26 +186,6 @@ async def refresh_outbound(repo: ProjectRepository, node_id: str) -> list[str]:
     return failed
 
 
-async def call_agent(
-    system_prompt: str,
-    model: str,
-    prompt: str,
-    history: list,
-    instructions: str | None = None,
-    toolsets: list | None = None,
-) -> AgentTurn:
-    """Run one agent turn. Writes nothing."""
-    agent = get_agent_for(system_prompt, model)
-    result = await agent.run(
-        prompt,
-        message_history=to_model_messages(history),
-        instructions=instructions,
-        toolsets=toolsets or None,
-        usage_limits=_limits(),
-    )
-    return _turn_from_result(result, model)
-
-
 def _reasoning_from(usage: object) -> int | None:
     """Reasoning tokens, wherever the provider put them.
 
@@ -217,28 +215,6 @@ def _turn_from(output: str, model: str, usage: object) -> AgentTurn:
     )
 
 
-@DBOS.workflow(name="chat.run_agent")
-async def run_agent_step(
-    system_prompt: str,
-    model: str,
-    prompt: str,
-    history: list,
-    instructions: str | None = None,
-) -> AgentTurn:
-    """Checkpointed LLM call, so a crash mid-call does not pay for it twice.
-
-    A workflow, not a step: ``DBOSDurability`` on the agent turns the model
-    request itself into a step, and that only happens inside a workflow.
-
-    No ``toolsets`` parameter by design. Toolsets hold live credentials and are
-    built per turn, so they cannot be registered with DBOS when the agent is
-    constructed, which is what durable tool calls require. A turn that has
-    already fired side-effecting calls is not safely replayable either. Tool
-    turns take the direct path instead.
-    """
-    return await call_agent(system_prompt, model, prompt, history, instructions)
-
-
 async def _stream_agent(
     system_prompt: str,
     model: str,
@@ -247,21 +223,19 @@ async def _stream_agent(
     *,
     instructions: str | None = None,
     toolsets: list | None = None,
-    durable: bool = False,
     resume: "ResumeInput | None" = None,
-    workflow_id: str | None = None,
     request_limit: int | None = None,
+    checkpoint: bool = False,
 ) -> AsyncIterator[tuple[str, dict]]:
     """Run one agent turn, yielding ``chunk`` deltas then one ``done`` or ``paused``.
 
-    ``agent.run()`` with an ``event_stream_handler``, not ``run_stream``: the
-    latter raises inside a DBOS workflow. The handler runs concurrently with the
-    run, so deltas cross to this generator through a memory stream.
-
-    Tools and resumes force the direct path: see ``run_agent_step``.
+    ``agent.run()`` with an ``event_stream_handler``. The handler runs
+    concurrently with the run, so deltas cross to this generator through a
+    memory stream. ``checkpoint`` adds a ``checkpoint`` item after each node.
     """
     from datetime import UTC, datetime
 
+    from pydantic_ai.capabilities import Hooks
     from pydantic_ai.messages import (
         FunctionToolCallEvent,
         FunctionToolResultEvent,
@@ -324,32 +298,21 @@ async def _stream_agent(
             if text:
                 await send.send(("chunk", {"text": text}))
 
-    use_durable = durable and not toolsets and resume is None
-    handler_key = str(uuid4()) if use_durable else None
+    capabilities = [Hooks(after_node_run=_checkpoint_hook(send))] if checkpoint else None
 
     async def drive() -> AgentTurn:
         # The stream closes on any exit, so a failed run cannot hang the reader.
         try:
             if resume is not None:
                 return await _resume_agent_direct(
-                    system_prompt, model, resume, instructions, toolsets, handler, request_limit
-                )
-            if use_durable:
-                if workflow_id is not None:
-                    from dbos import SetWorkflowID
-
-                    with SetWorkflowID(workflow_id):
-                        return await _run_agent_durable(
-                            system_prompt,
-                            model,
-                            prompt,
-                            history,
-                            instructions,
-                            handler_key,
-                            request_limit,
-                        )
-                return await _run_agent_durable(
-                    system_prompt, model, prompt, history, instructions, handler_key, request_limit
+                    system_prompt,
+                    model,
+                    resume,
+                    instructions,
+                    toolsets,
+                    handler,
+                    request_limit,
+                    capabilities,
                 )
             return await _run_agent_direct(
                 system_prompt,
@@ -360,12 +323,10 @@ async def _stream_agent(
                 toolsets,
                 handler,
                 request_limit,
+                capabilities,
             )
         finally:
             send.close()
-
-    if handler_key is not None:
-        _HANDLERS[handler_key] = handler
 
     # A bare task, not a task group: a cancel scope cannot span the ``yield``
     # below, because an async generator may be resumed or closed from a
@@ -385,7 +346,6 @@ async def _stream_agent(
                 yield item
     finally:
         # Unconditional: the bare task's own finally does not run on every exit.
-        _HANDLERS.pop(handler_key, None)
         if task.done():
             # Surface the run's own failure, not whatever the reader saw.
             result = task.result()
@@ -399,7 +359,15 @@ async def _stream_agent(
 
 
 async def _run_agent_direct(
-    system_prompt, model, prompt, history, instructions, toolsets, handler, request_limit=None
+    system_prompt,
+    model,
+    prompt,
+    history,
+    instructions,
+    toolsets,
+    handler,
+    request_limit=None,
+    capabilities=None,
 ) -> AgentTurn:
     agent = get_agent_for(system_prompt, model)
     result = await agent.run(
@@ -409,12 +377,20 @@ async def _run_agent_direct(
         toolsets=toolsets or None,
         event_stream_handler=handler,
         usage_limits=_limits(request_limit),
+        capabilities=capabilities,
     )
     return _turn_from_result(result, model)
 
 
 async def _resume_agent_direct(
-    system_prompt, model, resume, instructions, toolsets, handler, request_limit=None
+    system_prompt,
+    model,
+    resume,
+    instructions,
+    toolsets,
+    handler,
+    request_limit=None,
+    capabilities=None,
 ) -> AgentTurn:
     agent = get_agent_for(system_prompt, model)
     # Instructions are per run, not replayed from history: pass them again.
@@ -425,32 +401,9 @@ async def _resume_agent_direct(
         toolsets=toolsets or None,
         event_stream_handler=handler,
         usage_limits=_limits(request_limit),
+        capabilities=capabilities,
     )
     return _turn_from_result(result, model)
-
-
-# Live event handlers, looked up by key. DBOS pickles workflow arguments, so a
-# closure cannot be one; the key travels instead.
-_HANDLERS: dict[str, Callable] = {}
-
-
-@DBOS.workflow(name="chat.stream_agent")
-async def _run_agent_durable(
-    system_prompt, model, prompt, history, instructions, handler_key, request_limit=None
-) -> AgentTurn:
-    """Checkpointed counterpart to ``_run_agent_direct``.
-
-    No toolsets: the durable path is only taken for a tool-free turn, and a
-    toolset holds live credentials that must not reach Postgres either.
-    """
-    handler = _HANDLERS.get(handler_key)
-    if handler is None:
-        # Recovery after a restart: the closure died with the old process. The
-        # run replays without deltas and finalises from turn.output alone.
-        log.warning("no live handler for %s; recovering without streamed events", handler_key)
-    return await _run_agent_direct(
-        system_prompt, model, prompt, history, instructions, None, handler, request_limit
-    )
 
 
 def _turn_from_result(result, model: str) -> AgentTurn:
@@ -475,10 +428,13 @@ class TurnSetup:
 
 @dataclass(frozen=True)
 class ResumeInput:
-    """A parked run to continue, and the bubble it keeps appending to."""
+    """A parked or interrupted run to continue, and the bubble it keeps appending to.
+
+    ``deferred`` None: continue from history alone (recovery).
+    """
 
     history: list[ModelMessage]
-    deferred: DeferredToolResults
+    deferred: DeferredToolResults | None
     message: Message
 
 
@@ -576,14 +532,21 @@ class _Heartbeat:
             except TimeoutError:
                 pass
             try:
-                await to_thread.run_sync(self._beat)
+                row = await to_thread.run_sync(self._beat)
             except Exception:
                 log.exception("heartbeat failed for turn %s", self._run.conversation_id)
+                continue
+            # A stop sent to another backend, or before this one resumed the turn.
+            if row.cancel_requested and not self._run.cancel_requested:
+                await cancel_turn(self._run)
 
-    def _beat(self) -> None:
-        self._repo.update_message(self._run.message.id, heartbeat_at=_now_iso())
+    def _beat(self) -> Message:
+        # ponytail: unfenced; a live instance whose beats fail for 90s+ gets
+        # resumed elsewhere too. Fence writes on the claimed heartbeat if that bites.
+        row = self._repo.update_message(self._run.message.id, heartbeat_at=_now_iso())
         if not self._stop.is_set():
             self._repo.set_agent_status(self._run.node_id, "running")
+        return row
 
 
 def close_dangling_calls(
@@ -636,8 +599,14 @@ async def _finalise(
     status: str,
     turn: AgentTurn | None = None,
     error: str | None = None,
+    clear_parked: bool = False,
 ) -> Message:
-    """The last write for a turn. Runs shielded so a late cancel cannot cut it short."""
+    """The last write for a turn. Runs shielded so a late cancel cannot cut it short.
+
+    ``clear_parked``: a resumed turn drops its parked run here, before settle
+    publishes, so no reader sees the end with it still set. A handoff never
+    finalises, so recovery still finds it.
+    """
     from anyio import to_thread
 
     if status in ("cancelled", "failed", "complete"):
@@ -682,8 +651,48 @@ async def _finalise(
         except Exception:
             log.exception("tool call cancel write failed for %s", run.conversation_id)
     if status != "awaiting_approval":
+        if clear_parked and tool_repo is not None:
+            # Not on a pause: a second pause re-parked through on_paused.
+            try:
+                await to_thread.run_sync(
+                    lambda: tool_repo.set_pending_run(run.conversation_id, None)
+                )
+            except Exception:
+                log.exception("pending run clear failed for %s", run.conversation_id)
+        # Kept on a pause: an approved resume that dies restarts from it.
+        await _clear_checkpoint(repo, run.message.id)
         await _set_node_status(repo, run.node_id, "ready")
     return message
+
+
+def _checkpointing() -> bool:
+    # turn_checkpoints has no client policies, and recovery needs the key anyway.
+    return bool(settings.supabase_service_key)
+
+
+async def _clear_checkpoint(repo: ProjectRepository, message_id: str) -> None:
+    from anyio import to_thread
+
+    if not _checkpointing():
+        return
+    try:
+        await to_thread.run_sync(repo.clear_checkpoint, message_id)
+    except Exception:
+        log.exception("checkpoint clear failed for %s", message_id)
+
+
+async def _save_approvals(repo: ProjectRepository, resume: ResumeInput) -> None:
+    """Before the run starts: recovery replays exactly these, nothing else."""
+    from anyio import to_thread
+
+    if resume.deferred is None or not _checkpointing():
+        return
+    approvals = dict(resume.deferred.approvals)
+    try:
+        await to_thread.run_sync(lambda: repo.set_approvals(resume.message.id, approvals))
+    except Exception:
+        # Fails safe: without them recovery asks again.
+        log.exception("approvals write failed for %s", resume.message.id)
 
 
 async def _shielded(coro):
@@ -714,7 +723,6 @@ async def start_turn(
     project_id: str,
     tool_repo=None,
     client_token: str | None = None,
-    durable: bool = False,
     instructions: str | None = None,
     toolsets: list | None = None,
     on_paused: Callable[[DeferredToolRequests, list[ModelMessage]], Awaitable[None]] | None = None,
@@ -722,6 +730,7 @@ async def start_turn(
     sender_node_id: str | None = None,
     setup: Callable[[], Awaitable[TurnSetup]] | None = None,
     request_limit: int | None = None,
+    parent_message_id: str | None = None,
 ) -> RunningTurn:
     """Register and start one turn. Raises ``runs.TurnBusy`` before writing anything.
 
@@ -731,11 +740,20 @@ async def start_turn(
     ``setup``, when given, replaces instructions/toolsets/on_paused. It starts
     once the turn is registered, beside the row writes, and is awaited inside
     the task: cancel works while tools are built. A failed write cancels it.
+
+    ``parent_message_id`` is the orchestrator row a nested turn runs under.
+    A resume rewrites it, so a user-driven resume is top level again. Sent
+    only when set or clearing one, so it works without durability.sql.
     """
     from anyio import to_thread
+    from pydantic_ai.messages import ModelMessagesTypeAdapter
 
     run = RunningTurn(
-        conversation_id=conversation_id, node_id=node_id, project_id=project_id, model=model
+        conversation_id=conversation_id,
+        node_id=node_id,
+        project_id=project_id,
+        model=model,
+        repo=repo,
     )
     runs.register(run)
     setup_task = asyncio.ensure_future(setup()) if setup is not None else None
@@ -756,15 +774,19 @@ async def start_turn(
                     )
                 ),
             )
-            # Replayed token inserted nothing, so the read is already pre-insert.
-            if not user_message.replayed:
-                listed = [m for m in listed if m.seq < user_message.seq]
+            # A replayed row may have replies after it; history stops before it either way.
+            listed = [m for m in listed if m.seq < user_message.seq]
             history = listed[-DEFAULT_HISTORY_LIMIT:]
             run.user_message = user_message
             run.message, _ = await asyncio.gather(
                 to_thread.run_sync(
                     lambda: repo.add_message(
-                        conversation_id, "assistant", "", status="running", heartbeat_at=_now_iso()
+                        conversation_id,
+                        "assistant",
+                        "",
+                        status="running",
+                        heartbeat_at=_now_iso(),
+                        parent_message_id=parent_message_id,
                     )
                 ),
                 _set_node_status(repo, node_id, "running"),
@@ -773,13 +795,19 @@ async def start_turn(
             history = []
             run.text.append(resume.message.content)
             run.events.extend(resume.message.tool_calls)
-            run.message, _ = await asyncio.gather(
-                to_thread.run_sync(
-                    lambda: repo.update_message(
-                        resume.message.id, status="running", heartbeat_at=_now_iso()
-                    )
-                ),
+            # content/tool_calls too: recovery trims the bubble back to its checkpoint.
+            fields: dict = {
+                "status": "running",
+                "heartbeat_at": _now_iso(),
+                "content": resume.message.content,
+                "tool_calls": resume.message.tool_calls,
+            }
+            if parent_message_id is not None or resume.message.parent_message_id is not None:
+                fields["parent_message_id"] = parent_message_id
+            run.message, _, _ = await asyncio.gather(
+                to_thread.run_sync(lambda: repo.update_message(resume.message.id, **fields)),
                 _set_node_status(repo, node_id, "running"),
+                _save_approvals(repo, resume),
             )
     except BaseException:
         runs.unregister(conversation_id)
@@ -789,6 +817,27 @@ async def start_turn(
 
     flusher = _Flusher(repo, run)
     heartbeat = _Heartbeat(repo, run)
+
+    async def save_checkpoint(history: list[ModelMessage], keep_approvals: bool) -> None:
+        # Lengths now: every event before this item is already in run.text/events.
+        content_len, events_len = sum(map(len, run.text)), len(run.events)
+
+        def write() -> None:
+            # ponytail: rewrites the whole history per node, O(n^2) bytes over a
+            # long turn; append-only deltas if checkpoint size starts to bite.
+            dumped = ModelMessagesTypeAdapter.dump_python(history, mode="json")
+            repo.save_checkpoint(
+                run.message.id,
+                dumped,
+                content_len,
+                events_len,
+                clear_approvals=not keep_approvals,
+            )
+
+        try:
+            await to_thread.run_sync(write)
+        except Exception:
+            log.exception("checkpoint write failed for turn %s", conversation_id)
 
     async def drive() -> None:
         nonlocal instructions, toolsets, on_paused
@@ -810,7 +859,15 @@ async def start_turn(
             """
             run.result = result
             await heartbeat.stop()
-            message = await _finalise(repo, tool_repo, run, status=status, turn=turn, error=error)
+            message = await _finalise(
+                repo,
+                tool_repo,
+                run,
+                status=status,
+                turn=turn,
+                error=error,
+                clear_parked=resume is not None and resume.deferred is not None,
+            )
             run.message = message
             await runs.close(
                 run, event, {**payload, "assistant_message": _message_payload(message)}
@@ -825,8 +882,6 @@ async def start_turn(
                     built.toolsets,
                     built.on_paused,
                 )
-            workflow_id = str(uuid4()) if durable and not toolsets and resume is None else None
-            run.dbos_workflow_id = workflow_id
             async for event, payload in _stream_agent(
                 system_prompt,
                 model,
@@ -834,14 +889,17 @@ async def start_turn(
                 history,
                 instructions=instructions,
                 toolsets=toolsets,
-                durable=durable,
                 resume=resume,
-                workflow_id=workflow_id,
                 request_limit=request_limit,
+                checkpoint=_checkpointing(),
             ):
                 if event in ("chunk", "tool"):
                     await runs.emit(run, event, payload)
                     await flusher.maybe(force=event == "tool")
+                elif event == "checkpoint":
+                    # Bubble first: the checkpoint's lengths must not outrun the row.
+                    await flusher.maybe(force=True)
+                    await save_checkpoint(payload["history"], payload["keep_approvals"])
                 elif event == "paused":
 
                     async def paused_tail(payload=payload) -> None:
@@ -878,6 +936,9 @@ async def start_turn(
         except asyncio.CancelledError:
             runs.unregister(conversation_id)
             user_cancel = run.cancel_requested
+            if runs.handing_off() and not user_cancel:
+                # Row and node stay running; runs.hand_off marks the heartbeat stale.
+                raise
             children = list(run.children)
 
             async def cancel_tail() -> None:
@@ -943,7 +1004,14 @@ async def start_turn(
             await heartbeat.stop()
             # Best effort: without it the row sits running until the restart sweep.
             with contextlib.suppress(Exception):
-                await _finalise(repo, tool_repo, run, status="failed", error="turn failed")
+                await _finalise(
+                    repo,
+                    tool_repo,
+                    run,
+                    status="failed",
+                    error="turn failed",
+                    clear_parked=resume is not None and resume.deferred is not None,
+                )
             await _set_node_status(repo, node_id, "ready")
         finally:
             # A cancel before drive awaited setup_task leaves it running.
@@ -978,13 +1046,6 @@ async def cancel_turn(run: RunningTurn) -> None:
     _mark_cancel_requested(run)
     if run.task is not None:
         run.task.cancel()
-    if run.dbos_workflow_id is not None:
-        try:
-            # Only has to beat the next restart: otherwise recovery replays the
-            # PENDING model request.
-            await DBOS.cancel_workflow_async(run.dbos_workflow_id)
-        except Exception:
-            log.exception("dbos cancel failed for %s", run.dbos_workflow_id)
 
 
 async def cancel_for_node(conversation_id: str | None) -> None:
@@ -1042,6 +1103,7 @@ async def cancel_paused(
     except Exception:
         log.exception("cancel write failed for parked turn %s", conversation_id)
         final = message
+    await _clear_checkpoint(repo, message.id)
     await _set_node_status(repo, node_id, "ready")
     return final
 
@@ -1077,7 +1139,14 @@ async def run_turn(*args, parent: RunningTurn | None = None, **kwargs) -> ChatTu
     With ``parent`` the turn is a child: cancelling the parent cancels it, and
     cancelling only the child returns a cancelled ChatTurn rather than raising.
     """
+    if parent is not None and parent.message is not None:
+        kwargs.setdefault("parent_message_id", parent.message.id)
     run = await start_turn(*args, **kwargs)
+    return await await_turn(run, parent=parent)
+
+
+async def await_turn(run: RunningTurn, *, parent: RunningTurn | None = None) -> ChatTurn:
+    """Wait for a started turn, as run_turn does. Also joins one already running."""
     if parent is not None:
         parent.children.add(run)
         run.task.add_done_callback(lambda _t: parent.children.discard(run))

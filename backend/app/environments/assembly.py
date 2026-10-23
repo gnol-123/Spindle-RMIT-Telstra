@@ -1,14 +1,16 @@
 """Environment nodes to toolsets for one agent turn.
 
-Wrapper is decided per environment from its own tool_policy, where a tool
-node's is decided once from the agent's. Stopping a shell command in someone's
+Approval is gated per environment on its own tool_policy, where a tool
+node's follows the agent's. Both are read per call. Stopping a shell command in someone's
 repository and stopping one in a scratch space are different risks.
 """
 
 import re
+from collections.abc import Callable
+from functools import partial
 
 from anyio import to_thread
-from pydantic_ai.toolsets import ApprovalRequiredToolset, PrefixedToolset
+from pydantic_ai.toolsets import PrefixedToolset
 
 from app.environments.base import WORKSPACE_ROOT, EnvContext
 from app.environments.browser import BROWSER_TOOL_NAMES
@@ -16,7 +18,7 @@ from app.environments.lifecycle import ensure_provisioned
 from app.environments.registry import get_spec
 from app.repositories.environment_repo import EnvNode
 from app.services import previews_storage
-from app.tools.assembly import AssembledTools
+from app.tools.assembly import AssembledTools, LivePolicyToolset
 
 # The tools every environment exposes. Named here so the approval backfill
 # can register their prefixed forms without building a toolset.
@@ -82,7 +84,12 @@ def _thumbnail_saver(preview_repo, project_id: str, node_id: str):
 
 
 async def assemble_environments(
-    env_repo, nodes: list[EnvNode], *, agent_node_id: str, preview_repo=None
+    env_repo,
+    nodes: list[EnvNode],
+    *,
+    agent_node_id: str,
+    policy_of: Callable[[str], str | None],
+    preview_repo=None,
 ) -> AssembledTools:
     """Build one prefixed toolset per reachable environment.
 
@@ -140,9 +147,11 @@ async def assemble_environments(
             continue
 
         prefix = env_prefix(current.name, current.id)
-        toolset = PrefixedToolset(built, prefix)
-        if current.tool_policy == "ask":
-            toolset = ApprovalRequiredToolset(toolset)
+        toolset = LivePolicyToolset(
+            PrefixedToolset(built, prefix),
+            policy=partial(policy_of, current.id),
+            start=current.tool_policy,
+        )
 
         owner_by_tool[prefix] = current.id
         # pydantic-ai reports the prefixed name, and _record_pending_calls

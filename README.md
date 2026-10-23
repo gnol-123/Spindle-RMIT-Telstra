@@ -163,7 +163,7 @@ If the agent is set to *ask first*, it pauses at the tool and waits for your OK.
   </tr>
   <tr>
     <td><b>Backend</b></td>
-    <td>FastAPI on Python 3.12, Pydantic AI for the agents, DBOS for durable runs</td>
+    <td>FastAPI on Python 3.12, Pydantic AI for the agents, Postgres checkpoints for durable runs</td>
   </tr>
   <tr>
     <td><b>Data and auth</b></td>

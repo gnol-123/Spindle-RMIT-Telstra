@@ -6,19 +6,16 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from anyio import to_thread
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext, ToolFailed
-from pydantic_ai.toolsets import (
-    AbstractToolset,
-    ApprovalRequiredToolset,
-    PrefixedToolset,
-    WrapperToolset,
-)
+from pydantic_ai.toolsets import AbstractToolset, PrefixedToolset, WrapperToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
+from app.config import settings
 from app.repositories.tool_repo import ToolNode, load_node_secrets
 from app.tools.base import ToolContext
 from app.tools.oauth_refresh import with_access_token
@@ -56,7 +53,7 @@ class RecordingToolset(WrapperToolset):
     """Writes a tool_calls row around every invocation.
 
     One instance per tool node, built where the conversation id is known
-    (the chat router), never inside a DBOS-checkpointed step.
+    (the chat router), never inside a checkpointed step.
     """
 
     repo: Any = None
@@ -125,6 +122,44 @@ class RecordingToolset(WrapperToolset):
             return None
 
 
+@dataclass
+class LivePolicyToolset(WrapperToolset):
+    """ApprovalRequiredToolset, but the policy is read per call, so a flip mid-run counts.
+
+    ``policy`` reads one node's tool_policy (sync, run off the loop). ``only``
+    limits the gate to those tool names; None gates every tool. ``start`` is
+    the policy at turn start, used when a read on a user token fails (expired).
+    """
+
+    policy: Callable[[], str | None] = lambda: None
+    only: frozenset[str] | None = None
+    start: str | None = None
+
+    async def call_tool(
+        self, name: str, tool_args: dict[str, Any], ctx: RunContext, tool: ToolsetTool
+    ) -> Any:
+        if (
+            not ctx.tool_call_approved
+            and (self.only is None or name in self.only)
+            and await self._asks()
+        ):
+            raise ApprovalRequired
+        return await super().call_tool(name, tool_args, ctx, tool)
+
+    async def _asks(self) -> bool:
+        try:
+            current = await to_thread.run_sync(self.policy)
+        except Exception:
+            # With the service key a failed read is real: ask.
+            if settings.supabase_service_key or self.start is None:
+                log.exception("tool policy read failed, asking")
+                return True
+            log.warning("tool policy read failed, using the turn-start policy")
+            current = self.start
+        # Fail closed: a missing node reads as ask.
+        return current != "auto"
+
+
 async def _build(node: ToolNode, spec, keys: list[str]) -> Any:
     """One node's toolset. Raises on any secret, token or build failure."""
     secrets = await to_thread.run_sync(lambda: load_node_secrets(node.id, keys)) if keys else {}
@@ -137,7 +172,13 @@ async def _build(node: ToolNode, spec, keys: list[str]) -> Any:
     )
 
 
-async def assemble(repo, tool_nodes: list[ToolNode], *, ask: bool) -> AssembledTools:
+async def assemble(
+    repo,
+    tool_nodes: list[ToolNode],
+    *,
+    policy: Callable[[], str | None],
+    start: str | None = None,
+) -> AssembledTools:
     toolsets: list[AbstractToolset] = []
     owner_by_tool: dict[str, str] = {}
     owner_by_toolset: list[str] = []
@@ -184,8 +225,7 @@ async def assemble(repo, tool_nodes: list[ToolNode], *, ask: bool) -> AssembledT
             toolsets.append(built)
         owner_by_toolset.append(node.id)
 
-    if ask and toolsets:
-        toolsets = [ApprovalRequiredToolset(t) for t in toolsets]
+    toolsets = [LivePolicyToolset(t, policy=policy, start=start) for t in toolsets]
 
     return AssembledTools(
         toolsets=toolsets,
@@ -206,8 +246,8 @@ def record_calls(
     """Wrap each assembled toolset so every call it serves writes a row.
 
     Built where the conversation id is known (the chat router), never inside
-    a DBOS-checkpointed step: ``repo`` and any secrets a toolset holds must
-    stay out of a workflow argument.
+    a checkpointed step: ``repo`` and any secrets a toolset holds must
+    stay out of any persisted state.
     """
     return [
         RecordingToolset(

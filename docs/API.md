@@ -225,6 +225,12 @@ a drag that ends where it started is harmless.
 `model` is validated against `GET /models` before anything is written, so a
 typo is a `422` naming the valid options rather than a turn that fails later.
 
+`tool_policy` applies to the next tool call, even mid-turn. Setting `auto`
+also resumes a turn paused for approval, with every call approved, once none
+of its pending calls still asks (an environment call follows the
+environment's own policy). The resume runs detached; re-attach with
+`/chat/attach` to watch it.
+
 **This route updates agent nodes only.** Each kind has its own:
 
 | Node kind | Where to patch it |
@@ -736,6 +742,9 @@ a different project.
 
 `status`, `config` and `kind` are not client writable. An empty body is a
 no-op. `404` if the node is not yours. `422` for an unknown `tool_policy`.
+`tool_policy` applies per call, mid-turn too; setting `auto` resumes, detached,
+every turn paused on this environment's calls once none of its pending calls
+still asks.
 
 ### `POST /projects/{project_id}/environments/{node_id}/start`
 
@@ -1032,8 +1041,7 @@ a `done` event carrying that `failed` assistant row always follows it, so keep
 reading until `done` rather than closing on `error`.
 
 The turn is persisted exactly as `/chat` persists it, so idempotency, `seq`
-ordering and history replay are unchanged. Unlike `/chat` it is **not**
-DBOS-checkpointed: a step checkpoints a return value and a stream has none.
+ordering and history replay are unchanged.
 
 A `denied` or `cancelled` `result` is written to the row but not emitted as a
 `tool` event: it is recorded as the turn settles, after the live stream has
@@ -1099,7 +1107,8 @@ usual; `fetch` with a header works, `EventSource` does not.
 ### Approval
 
 When a node's `tool_policy` is `"ask"`, a tool call the agent wants to make
-pauses the turn instead of running it.
+pauses the turn instead of running it. The policy is read per call, so a
+change takes effect on the next call of a running turn.
 
 **`POST /chat` returns `ApprovalRequiredResponse` instead of `ChatResponse`.**
 A client tells them apart by the `paused` field, present and `true` only on

@@ -457,11 +457,13 @@ class ToolRepository:
             .execute()
         )
 
-    def cancel_calls(self, conversation_id: str, from_statuses: list[str]) -> None:
-        """Mark every call in the given statuses cancelled. Used when a turn is stopped."""
+    def cancel_calls(
+        self, conversation_id: str, from_statuses: list[str], status: str = "cancelled"
+    ) -> None:
+        """Move every call in the given statuses to ``status``. Used when a turn is stopped."""
         (
             self._db.table("tool_calls")
-            .update({"status": "cancelled"})
+            .update({"status": status})
             .eq("conversation_id", conversation_id)
             .eq("owner_id", self._user_id)
             .in_("status", from_statuses)
@@ -479,6 +481,18 @@ class ToolRepository:
             .execute()
         ).data
         return list(rows)
+
+    def paused_agents_for_tool_node(self, tool_node_id: str) -> list[str]:
+        """Agent node ids with a call on this node waiting for approval, one query."""
+        rows = (
+            self._db.table("tool_calls")
+            .select("agent_node_id")
+            .eq("tool_node_id", tool_node_id)
+            .eq("status", "pending_approval")
+            .eq("owner_id", self._user_id)
+            .execute()
+        ).data
+        return sorted({r["agent_node_id"] for r in rows})
 
     # -- pending run --------------------------------------------------------
 

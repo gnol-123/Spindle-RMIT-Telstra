@@ -179,7 +179,7 @@ class AuthContext(BaseModel):
     RLS policies in the database.
 
     ***The token is a REAL credential. DO NOT include it in ``response_model``, and
-    NEVER pass it into a DBOS workflow***
+    NEVER persist or checkpoint it***
     """
 
     user: UserResponse

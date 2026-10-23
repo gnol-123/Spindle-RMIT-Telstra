@@ -35,6 +35,7 @@ from app.routers.deps import EnvRepo, ProjectRepo, ToolRepo, TurnRepos
 from app.routers.environments import EnvironmentNodeResponse, create_environment_node
 from app.services import intake, previews_storage
 from app.services.models import ModelsUnavailable, list_models
+from app.services.turns import resume_waiting
 from app.tools.base import ToolContext
 from app.tools.mcp.base import POOLED_VERIFY
 from app.tools.oauth_refresh import TokenExchangeError, with_access_token
@@ -718,11 +719,14 @@ async def update_node(
     repo: ProjectRepo,
     tool_repo: ToolRepo,
     env_repo: EnvRepo,
+    turn_repos: TurnRepos,
 ) -> NodeResponse:
     """Move, rename, set the tool policy, or set the model. Empty body is a no-op.
 
     A model is checked against the provider's catalogue first, so a typo is a
     422 here rather than a failed turn later. "" clears the override.
+    Setting auto resumes a turn parked for approval, detached, once nothing
+    it waits on still asks.
     """
     changes = req.model_dump(exclude_none=True)
     if req.model:
@@ -747,6 +751,8 @@ async def update_node(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=await _wrong_kind_detail(node_id, tool_repo, env_repo),
         )
+    if req.tool_policy == "auto":
+        resume_waiting(turn_repos, agent=node)
     return NodeResponse.of(node)
 
 

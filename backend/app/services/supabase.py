@@ -98,7 +98,7 @@ def get_service_client() -> Client:
     Used for tool secrets and for turn repositories, which outlive the
     caller's token.
 
-    Secrets never reach DBOS checkpointing.
+    Secrets are never persisted or checkpointed.
     Never exposed during a request, only decrypted in memory and returned to the caller.
     """
     if not settings.supabase_url or not settings.supabase_service_key:
