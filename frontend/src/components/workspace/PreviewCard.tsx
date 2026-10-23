@@ -72,7 +72,8 @@ export default function PreviewCard({
           src={src}
           title={title}
           loading="lazy"
-          sandbox="allow-scripts allow-same-origin allow-forms"
+          // popups: report citations open their source in a new tab
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
           style={{ width: `${100 / scale}%`, height: `${100 / scale}%`, transform: `scale(${scale})`, transformOrigin: "0 0" }}
           className={`absolute left-0 top-0 border-0 ${size === "sm" ? "pointer-events-none" : ""}`}
         />

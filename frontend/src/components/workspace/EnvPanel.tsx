@@ -552,7 +552,7 @@ export default function EnvPanel({
                       src={src}
                       title={current ? label(current) : "Preview"}
                       onLoad={() => setFrameLoading(false)}
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
                       className="w-full h-full border-0 bg-white"
                     />
                   ) : stalled ? (

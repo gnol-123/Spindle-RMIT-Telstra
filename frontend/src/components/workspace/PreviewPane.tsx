@@ -165,7 +165,7 @@ export default function PreviewPane({
                 onLoad={() => setLoading(false)}
                 // Cross-origin already walls it off from the app; sandbox also
                 // stops the page navigating the app's own tab.
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
                 className="w-full h-full border-0 bg-white"
               />
             </div>
