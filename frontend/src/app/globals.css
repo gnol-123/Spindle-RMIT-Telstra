@@ -363,6 +363,296 @@ a:hover {
   animation-delay: 300ms;
 }
 
+/* Login side panel (LoginAnim). Cards are positioned on a fixed 660x560
+   stage; the component toggles these classes and sets left/top/transform. */
+.la-panel {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: radial-gradient(120% 90% at 60% 35%, #141c44 0%, #0c1230 55%, #090d20 100%);
+}
+.la-dots {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+.la-spiral {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 320px;
+  transform: translateY(-50%);
+  opacity: 0.15;
+}
+.la-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.la-stage {
+  position: relative;
+  width: 660px;
+  height: 560px;
+  flex: none;
+}
+.la-stage svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.la-edge {
+  fill: none;
+  stroke: rgba(92, 141, 255, 0.5);
+  stroke-width: 1.5;
+  transition: opacity 0.4s;
+}
+.la-chain {
+  stroke: rgba(244, 78, 26, 0.45);
+  stroke-dasharray: 4 5;
+}
+.la-pkt {
+  fill: #F44E1A;
+  filter: drop-shadow(0 0 6px #F44E1A);
+}
+.la-pkt.la-blue {
+  fill: #5C8DFF;
+  filter: drop-shadow(0 0 6px #5C8DFF);
+}
+.la-card {
+  position: absolute;
+  backdrop-filter: blur(8px);
+  background: rgba(19, 26, 53, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 13px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  transition: left 0.7s cubic-bezier(0.6, 0, 0.2, 1), top 0.7s cubic-bezier(0.6, 0, 0.2, 1),
+    width 0.7s cubic-bezier(0.6, 0, 0.2, 1), transform 0.7s cubic-bezier(0.5, 0, 0.2, 1.15), opacity 0.45s,
+    border-color 0.3s, box-shadow 0.3s, padding 0.7s;
+}
+.la-snap .la-card {
+  transition: none;
+}
+.la-hidden {
+  opacity: 0;
+}
+.la-idea {
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(10, 15, 36, 0.8);
+}
+.la-lbl {
+  font-size: 11px;
+  color: rgba(245, 237, 226, 0.5);
+  margin-bottom: 6px;
+  max-height: 20px;
+  overflow: hidden;
+  transition: max-height 0.5s, opacity 0.4s, margin 0.5s;
+}
+.la-txt {
+  font-size: 17px;
+  line-height: 1.5;
+  transition: font-size 0.7s;
+}
+.la-mini {
+  padding: 9px 12px;
+}
+.la-mini .la-lbl {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+}
+.la-mini .la-txt {
+  font-size: 12px;
+}
+.la-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: #F44E1A;
+  vertical-align: -3px;
+  margin-left: 1px;
+  animation: la-caret 1s steps(1) infinite;
+}
+.la-mini .la-caret {
+  display: none;
+}
+@keyframes la-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.la-orch {
+  z-index: 2;
+  width: 264px;
+  height: 96px;
+  padding: 12px 14px;
+}
+.la-orch.la-think {
+  border-color: rgba(92, 141, 255, 0.65);
+  box-shadow: 0 0 0 6px rgba(92, 141, 255, 0.07), 0 0 60px rgba(92, 141, 255, 0.3);
+}
+.la-hd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.la-ic {
+  color: #5C8DFF;
+  font-size: 13px;
+}
+.la-role {
+  font-size: 10.5px;
+  color: rgba(245, 237, 226, 0.5);
+  margin-top: 3px;
+  white-space: nowrap;
+}
+.la-st {
+  margin-top: 9px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+.la-spin {
+  display: none;
+}
+.la-think .la-spin,
+.la-run .la-spin {
+  display: inline-flex;
+}
+.la-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  flex: none;
+}
+.la-think .la-dot,
+.la-run .la-dot {
+  display: none;
+}
+.la-done .la-dot {
+  background: #7ee787;
+}
+.la-agent {
+  z-index: 1;
+  width: 140px;
+  height: 104px;
+  padding: 11px 12px;
+}
+.la-bob {
+  animation: la-bob 3.2s ease-in-out infinite;
+}
+@keyframes la-bob {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.la-out {
+  margin-top: 7px;
+  min-height: 14px;
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: rgba(245, 237, 226, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.la-run {
+  border-color: rgba(244, 78, 26, 0.55);
+  box-shadow: 0 0 30px rgba(244, 78, 26, 0.18);
+}
+.la-done {
+  border-color: rgba(126, 231, 135, 0.35);
+}
+.la-result {
+  left: 150px;
+  top: 120px;
+  width: 360px;
+  padding: 20px 22px;
+  border-color: rgba(126, 231, 135, 0.35);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 60px rgba(126, 231, 135, 0.08);
+}
+.la-tag {
+  font-size: 10.5px;
+  color: #7ee787;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.04em;
+}
+.la-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 6px 0 4px;
+}
+.la-quote {
+  font-size: 12.5px;
+  color: rgba(245, 237, 226, 0.6);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.la-chk {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  padding: 6px 0;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.35s, transform 0.35s;
+}
+.la-chk.la-on {
+  opacity: 1;
+  transform: none;
+}
+.la-chk i {
+  font-style: normal;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(126, 231, 135, 0.15);
+  color: #7ee787;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+}
+.la-chk span {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.la-review {
+  margin-top: 14px;
+  background: #0D54FF;
+  border-radius: 9px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px;
+}
+.la-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 26px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(245, 237, 226, 0.5);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .proj-card:hover {
     border-color: rgba(92, 141, 255, 0.45);
