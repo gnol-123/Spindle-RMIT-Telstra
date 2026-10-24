@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { login, signup, googleLoginUrl, ApiError } from "@/lib/api";
 import { BrandLockup, BrandMark } from "./Brand";
+import LoginAnim from "./LoginAnim";
 
 export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -43,80 +44,96 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
     }
   }
 
+  const input =
+    "w-full bg-white/[0.03] border border-white/[0.13] rounded-[10px] px-3.5 py-3 text-sm outline-none focus:border-accent/50 placeholder:text-white/30";
+
   return (
-    <div
-      className="h-screen flex items-center justify-center bg-bg text-text"
-      style={{
-        backgroundImage: "radial-gradient(rgba(255,255,255,.06) 1px, transparent 1px)",
-        backgroundSize: "26px 26px",
-      }}
-    >
-      <form
-        onSubmit={handleSubmit}
-        className="w-[340px] bg-modal border border-accent/[0.3] rounded-2xl p-7 space-y-4 shadow-[0_40px_120px_rgba(0,0,0,.8),0_0_70px_rgba(92,141,255,.07)] anim-pop"
-      >
-        <div className="flex items-center gap-3 pb-1">
-          <BrandMark />
-          <div>
-          <div className="text-sm font-semibold">Spindle</div>
-          <div className="text-xs text-muted">
-            {mode === "login" ? "Log in to your workspace" : "Create an account"}
-          </div>
-          </div>
-          <BrandLockup className="ml-auto scale-[.72] origin-right" />
+    <div className="h-dvh flex bg-bg text-text overflow-hidden">
+      <section className="flex-1 min-[900px]:flex-none min-[900px]:w-[clamp(420px,36vw,540px)] flex flex-col px-6 sm:px-11 py-8 overflow-y-auto">
+        <div className="flex items-center gap-2.5">
+          <BrandMark size={26} />
+          <span className="text-[15px] font-semibold">Spindle</span>
         </div>
 
-        <input
-          type="email"
-          required
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full bg-white/[0.03] border border-white/[0.13] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-accent/50 placeholder:text-white/30"
-        />
-        <input
-          type="password"
-          required
-          minLength={8}
-          placeholder="Password (min 8 chars)"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-white/[0.03] border border-white/[0.13] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-accent/50 placeholder:text-white/30"
-        />
+        <form onSubmit={handleSubmit} className="m-auto w-full max-w-[390px] py-10 anim-pop">
+          <h1 className="text-[30px] font-semibold tracking-[-0.01em]">
+            {mode === "login" ? "Welcome back" : "Create an account"}
+          </h1>
+          <p className="text-sm text-[rgba(245,237,226,0.55)] mt-1.5 mb-7">
+            {mode === "login" ? "Log in to your workspace" : "Sign up to start spindling ideas"}
+          </p>
 
-        {error && <div className="text-xs text-red-400">{error}</div>}
-        {message && <div className="text-xs text-green">{message}</div>}
+          <button
+            type="button"
+            onClick={handleGoogle}
+            className="w-full border border-white/[0.14] rounded-[10px] py-3 text-sm text-text/85 hover:border-accent/45"
+          >
+            Continue with Google
+          </button>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full bg-primary hover:bg-[#5C8DFF] text-white font-semibold rounded-lg py-2.5 text-sm disabled:opacity-50"
-        >
-          {busy ? "Please wait…" : mode === "login" ? "Log in" : "Sign up"}
-        </button>
+          <div className="flex items-center gap-3 text-[11px] text-muted my-5">
+            <div className="flex-1 h-px bg-border" />
+            or
+            <div className="flex-1 h-px bg-border" />
+          </div>
 
-        <button
-          type="button"
-          onClick={() => setMode(mode === "login" ? "signup" : "login")}
-          className="w-full text-xs text-muted hover:text-text"
-        >
-          {mode === "login" ? "Need an account? Sign up" : "Already have one? Log in"}
-        </button>
+          <label htmlFor="login-email" className="block text-xs text-[rgba(245,237,226,0.75)] mb-1.5">
+            Email
+          </label>
+          <input
+            id="login-email"
+            type="email"
+            required
+            autoComplete="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={`${input} mb-4`}
+          />
+          <label htmlFor="login-password" className="block text-xs text-[rgba(245,237,226,0.75)] mb-1.5">
+            Password
+          </label>
+          <input
+            id="login-password"
+            type="password"
+            required
+            minLength={8}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            placeholder="Min 8 characters"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={`${input} mb-4`}
+          />
 
-        <div className="flex items-center gap-3 text-[10px] text-muted">
-          <div className="flex-1 h-px bg-border" />
-          or
-          <div className="flex-1 h-px bg-border" />
-        </div>
+          {error && <div className="text-xs text-red-400 mb-3">{error}</div>}
+          {message && <div className="text-xs text-green mb-3">{message}</div>}
 
-        <button
-          type="button"
-          onClick={handleGoogle}
-          className="w-full border border-white/[0.14] rounded-lg py-2.5 text-sm text-text/80 hover:border-accent/40"
-        >
-          Continue with Google
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full bg-primary hover:bg-accent text-white font-semibold rounded-[10px] py-3 text-sm disabled:opacity-50"
+          >
+            {busy ? "Please wait…" : mode === "login" ? "Log in" : "Sign up"}
+          </button>
+
+          <p className="text-center text-xs text-muted mt-4">
+            {mode === "login" ? "Need an account?" : "Already have one?"}{" "}
+            <button
+              type="button"
+              onClick={() => setMode(mode === "login" ? "signup" : "login")}
+              className="text-accent hover:text-[#8FB1FF]"
+            >
+              {mode === "login" ? "Sign up" : "Log in"}
+            </button>
+          </p>
+        </form>
+
+        <BrandLockup className="scale-[.8] origin-left" />
+      </section>
+
+      <div className="hidden min-[900px]:block flex-1 p-3 pl-0">
+        <LoginAnim />
+      </div>
     </div>
   );
 }
