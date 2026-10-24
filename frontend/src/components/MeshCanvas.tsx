@@ -95,7 +95,9 @@ export default function MeshCanvas({
   focusNodeId,
   initialPrompt,
   onBack,
+  bell,
 }: {
+  bell?: React.ReactNode;
   project: Project;
   // Agent to select and open the chat for on mount.
   focusNodeId?: string;
@@ -978,6 +980,7 @@ export default function MeshCanvas({
         <PaletteTabs tab={paletteTab} onTabChange={setPaletteTab} />
 
         <div className="ml-auto flex items-center gap-2.5">
+          {bell}
           <BrandLockup className="hidden lg:flex mr-1.5" />
           <div
             className="hidden lg:flex items-center gap-[7px] px-[11px] py-1.5 border border-white/10 rounded-lg text-[11.5px] text-white/50 whitespace-nowrap"

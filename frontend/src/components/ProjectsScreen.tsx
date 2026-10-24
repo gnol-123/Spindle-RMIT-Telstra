@@ -54,9 +54,11 @@ function Down() {
 export default function ProjectsScreen({
   onOpen,
   onLoggedOut,
+  bell,
 }: {
   onOpen: (project: Project, focusNodeId?: string, initialPrompt?: string) => void;
   onLoggedOut: () => void;
+  bell?: React.ReactNode;
 }) {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -258,12 +260,13 @@ export default function ProjectsScreen({
       <header className="flex items-center gap-4 px-5 h-[60px] border-b border-white/[0.09]">
         <Brand />
         <BrandLockup className="ml-auto hidden sm:flex" />
+        <div className="ml-auto sm:ml-0">{bell}</div>
         <button
           onClick={async () => {
             await logout();
             onLoggedOut();
           }}
-          className={`ml-auto sm:ml-0 shrink-0 whitespace-nowrap bg-transparent border border-white/[0.14] text-white/60 hover:text-text hover:border-white/30 rounded-lg px-3 py-2 text-xs ${RING}`}
+          className={`shrink-0 whitespace-nowrap bg-transparent border border-white/[0.14] text-white/60 hover:text-text hover:border-white/30 rounded-lg px-3 py-2 text-xs ${RING}`}
         >
           Log out
         </button>

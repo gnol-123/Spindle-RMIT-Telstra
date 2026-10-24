@@ -1332,6 +1332,46 @@ persisting the pause's usage at park time, which is a schema question (a row in
 
 ---
 
+## Push notifications
+
+A finished, failed or approval-waiting turn writes a notification row (DB
+trigger). The bell reads it; subscribed devices also get a Web Push.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/notifications` | **yes** | Recent notifications, newest first. `?limit=` 1-200, default 100 |
+| `POST` | `/notifications/read` | **yes** | Mark unread as read. Body `{ "project_id": uuid? }`; omit for all. Returns `{ "updated": n }` |
+| `GET` | `/push/key` | no | `{ "public_key": str \| null }`. Null when push is off |
+| `POST` | `/push/subscriptions` | **yes** | Save a `PushSubscription`: `{ "endpoint", "keys": { "p256dh", "auth" } }`. `204`; `422` for a non push service endpoint |
+| `PATCH` | `/push/subscriptions` | **yes** | `{ "endpoint", "visible": bool }`. Visible devices are deferred. `204` |
+| `DELETE` | `/push/subscriptions` | **yes** | `{ "endpoint" }`. `204` |
+
+Sending: `_finalise` kicks a send; a 10 s poll catches the rest. A `404`/`410`
+from the push service deletes the subscription. Push is off unless
+`SUPABASE_SERVICE_KEY` and all three VAPID variables are set.
+
+Endpoint allowlist (API and `upsert_push_subscription`): `https`, port 443, no userinfo, host `web.push.apple.com`, `fcm.googleapis.com`, `*.push.services.mozilla.com` or `*.notify.windows.com`.
+
+Device cap: 10 subscriptions per account; registering an 11th drops the least recently updated.
+
+### VAPID keys
+
+Generate once, with the backend venv (`py_vapid` ships with pywebpush):
+
+```
+python -c "from py_vapid import Vapid; from py_vapid.utils import b64urlencode; from cryptography.hazmat.primitives import serialization as s; v = Vapid(); v.generate_keys(); print('VAPID_PRIVATE_KEY=' + b64urlencode(v.private_key.private_numbers().private_value.to_bytes(32, 'big'))); print('VAPID_PUBLIC_KEY=' + b64urlencode(v.public_key.public_bytes(s.Encoding.X962, s.PublicFormat.UncompressedPoint)))"
+```
+
+| Variable | Value |
+|---|---|
+| `VAPID_PRIVATE_KEY` | base64url raw private key (printed above) |
+| `VAPID_PUBLIC_KEY` | base64url uncompressed public point (printed above) |
+| `VAPID_SUBJECT` | `mailto:` address or `https:` URL push services can contact |
+
+Rotating the keys invalidates every existing subscription.
+
+---
+
 ## Status codes
 
 | Code | Meaning |

@@ -22,6 +22,7 @@ import {
   UsageTotals,
   ChatMessage,
   CancelChatResponse,
+  AppNotification,
 } from "./types";
 
 const API_URL = (
@@ -91,7 +92,7 @@ function isExpired(token: string, skewSeconds = 60): boolean {
 
 async function request<T>(
   path: string,
-  opts: { method?: string; body?: unknown; auth?: boolean; signal?: AbortSignal } = {}
+  opts: { method?: string; body?: unknown; auth?: boolean; signal?: AbortSignal; keepalive?: boolean } = {}
 ): Promise<T> {
   const send = async (token?: string) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -101,6 +102,7 @@ async function request<T>(
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
+      keepalive: opts.keepalive,
     });
   };
 
@@ -142,6 +144,8 @@ export async function login(email: string, password: string) {
 }
 
 export async function logout() {
+  // drop this device's push sub while the token is still valid
+  await import("./push").then((m) => m.disablePush()).catch(() => {});
   try {
     // Raw fetch, not request(): refreshing a session we are about to throw
     // away just to say goodbye is wasted work.
@@ -786,6 +790,43 @@ export async function getUsage() {
 
 export async function getProjectUsage(projectId: string) {
   return request<UsageTotals>(`/projects/${projectId}/usage`, { auth: true });
+}
+
+// Notifications
+
+export async function listNotifications(limit = 100) {
+  return request<AppNotification[]>(`/notifications?limit=${limit}`, { auth: true });
+}
+
+export async function markNotificationsRead(projectId: string | null = null) {
+  return request<{ updated: number }>("/notifications/read", {
+    method: "POST",
+    auth: true,
+    body: { project_id: projectId },
+  });
+}
+
+// No auth: the key is public
+export async function getPushKey() {
+  const r = await request<{ public_key: string | null }>("/push/key");
+  return r.public_key;
+}
+
+export async function savePushSubscription(sub: PushSubscriptionJSON) {
+  return request<void>("/push/subscriptions", { method: "POST", auth: true, body: sub });
+}
+
+export async function setPushVisible(endpoint: string, visible: boolean, opts?: { keepalive?: boolean }) {
+  return request<void>("/push/subscriptions", {
+    method: "PATCH",
+    auth: true,
+    body: { endpoint, visible },
+    keepalive: opts?.keepalive,
+  });
+}
+
+export async function deletePushSubscription(endpoint: string) {
+  return request<void>("/push/subscriptions", { method: "DELETE", auth: true, body: { endpoint } });
 }
 
 export { ApiError };

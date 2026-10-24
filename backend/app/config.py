@@ -63,9 +63,25 @@ class Settings(BaseSettings):
     # Shutdown grace period to let detached turns (see workflows._DETACHED) finish.
     detached_join_timeout_s: int = 30
 
+    # Web Push (VAPID). Any empty value, or no service key, disables push.
+    vapid_private_key: str = ""
+    vapid_public_key: str = ""
+    vapid_subject: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 settings = Settings()
+
+
+def push_enabled() -> bool:
+    return all(
+        (
+            settings.supabase_service_key,
+            settings.vapid_private_key,
+            settings.vapid_public_key,
+            settings.vapid_subject,
+        )
+    )

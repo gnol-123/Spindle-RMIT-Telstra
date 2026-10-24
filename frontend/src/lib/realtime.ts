@@ -1,4 +1,5 @@
-import { RealtimeClient, type RealtimePostgresChangesPayload } from "@supabase/realtime-js";
+import { RealtimeClient, type RealtimeChannel, type RealtimePostgresChangesPayload } from "@supabase/realtime-js";
+import type { AppNotification } from "./types";
 
 export type CanvasChange = {
   table: "nodes" | "edges";
@@ -39,16 +40,17 @@ export function coalesce(fn: () => void, ms: number): { call(): void; cancel(): 
   };
 }
 
-export function subscribeCanvas(
-  projectId: string,
+// client + channel + token join, shared by every subscription
+function openRealtime(
+  name: string,
   getToken: () => Promise<string | null>,
-  onChange: (c: CanvasChange) => void,
   onLive: (live: boolean) => void,
+  wire: (channel: RealtimeChannel, isStopped: () => boolean) => void,
 ): () => void {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) {
-    console.warn("realtime: missing Supabase env, canvas stays offline");
+    console.warn("realtime: missing Supabase env, staying offline");
     onLive(false);
     return () => {};
   }
@@ -57,23 +59,14 @@ export function subscribeCanvas(
     params: { apikey: key },
     accessToken: getToken,
   });
-  const channel = client.channel(`canvas:${projectId}`, {
+  const channel = client.channel(name, {
     config: { postgres_changes_options: { wait: true } },
   });
 
   // cleanup closes the channel, which still emits CLOSED; drop it
   let stopped = false;
   let warned = false;
-  const handle = (p: RealtimePostgresChangesPayload<Row>) => {
-    if (!stopped) onChange(toChange(p));
-  };
-  for (const table of ["nodes", "edges"]) {
-    const filter = `project_id=eq.${projectId}`;
-    channel.on("postgres_changes", { event: "INSERT", schema: "public", table, filter }, handle);
-    channel.on("postgres_changes", { event: "UPDATE", schema: "public", table, filter }, handle);
-    // DELETE can't be filtered by project
-    channel.on("postgres_changes", { event: "DELETE", schema: "public", table }, handle);
-  }
+  wire(channel, () => stopped);
 
   // join must carry the user token, or RLS drops every insert/update as anon
   client
@@ -106,4 +99,41 @@ export function subscribeCanvas(
     client.removeAllChannels().catch(() => {});
     client.disconnect();
   };
+}
+
+export function subscribeCanvas(
+  projectId: string,
+  getToken: () => Promise<string | null>,
+  onChange: (c: CanvasChange) => void,
+  onLive: (live: boolean) => void,
+): () => void {
+  return openRealtime(`canvas:${projectId}`, getToken, onLive, (channel, isStopped) => {
+    const handle = (p: RealtimePostgresChangesPayload<Row>) => {
+      if (!isStopped()) onChange(toChange(p));
+    };
+    for (const table of ["nodes", "edges"]) {
+      const filter = `project_id=eq.${projectId}`;
+      channel.on("postgres_changes", { event: "INSERT", schema: "public", table, filter }, handle);
+      channel.on("postgres_changes", { event: "UPDATE", schema: "public", table, filter }, handle);
+      // DELETE can't be filtered by project
+      channel.on("postgres_changes", { event: "DELETE", schema: "public", table }, handle);
+    }
+  });
+}
+
+export function subscribeNotifications(
+  userId: string,
+  getToken: () => Promise<string | null>,
+  onRow: (row: AppNotification, event: "INSERT" | "UPDATE") => void,
+  onLive: (live: boolean) => void,
+): () => void {
+  return openRealtime(`notifications:${userId}`, getToken, onLive, (channel, isStopped) => {
+    const handle = (p: RealtimePostgresChangesPayload<AppNotification>) => {
+      // only INSERT and UPDATE are subscribed below
+      if (!isStopped()) onRow(p.new as AppNotification, p.eventType as "INSERT" | "UPDATE");
+    };
+    const filter = `owner_id=eq.${userId}`;
+    channel.on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter }, handle);
+    channel.on("postgres_changes", { event: "UPDATE", schema: "public", table: "notifications", filter }, handle);
+  });
 }

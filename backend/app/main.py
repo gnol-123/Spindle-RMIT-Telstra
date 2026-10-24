@@ -5,8 +5,8 @@ import re
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
-from app.routers import auth, chat, environments, health, oauth, projects
+from app.config import push_enabled, settings
+from app.routers import auth, chat, environments, health, notifications, oauth, projects
 from app.services.runs import hand_off, join_detached
 from app.tools.mcp.base import close_pool
 
@@ -50,14 +50,17 @@ app.include_router(projects.router)
 app.include_router(environments.router)
 app.include_router(chat.router)
 app.include_router(oauth.router)
+app.include_router(notifications.router)
 
 
 _recovery_task: asyncio.Task | None = None
+_push_task: asyncio.Task | None = None
 
 
 async def _join_detached_turns() -> None:
-    if _recovery_task is not None:
-        _recovery_task.cancel()
+    for task in (_recovery_task, _push_task):
+        if task is not None:
+            task.cancel()
     if settings.supabase_service_key:
         # The next instance's recovery loop resumes them; waiting would only delay that.
         await hand_off(settings.detached_join_timeout_s)
@@ -105,6 +108,22 @@ async def _start_recovery() -> None:
 
 
 app.add_event_handler("startup", _start_recovery)
+
+
+async def _start_push() -> None:
+    """Send push notifications _finalise's kick missed."""
+    global _push_task
+    if not push_enabled():
+        vapid = (settings.vapid_private_key, settings.vapid_public_key, settings.vapid_subject)
+        if any(vapid):
+            log.warning("push off: VAPID settings or service key missing")
+        return
+    from app.services.push import push_loop
+
+    _push_task = asyncio.ensure_future(push_loop())
+
+
+app.add_event_handler("startup", _start_push)
 
 
 @app.get("/")

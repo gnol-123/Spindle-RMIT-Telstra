@@ -2,11 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { loadAuth, saveAuth } from "@/lib/auth";
-import { completeOAuth, getMe, listProjects } from "@/lib/api";
+import { completeOAuth, getMe, listProjects, savePushSubscription } from "@/lib/api";
+import { pushSupported, registerServiceWorker, startPresence } from "@/lib/push";
+import { useNotifications } from "@/lib/useNotifications";
 import { Project } from "@/lib/types";
 import LoginScreen from "@/components/LoginScreen";
 import ProjectsScreen from "@/components/ProjectsScreen";
 import MeshCanvas from "@/components/MeshCanvas";
+import NotificationBell from "@/components/NotificationBell";
 
 // ?project=<id> keeps the open project across refresh and back/forward.
 async function projectFromUrl(): Promise<Project | null> {
@@ -22,6 +25,7 @@ export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
   // focusNodeId + initialPrompt: Build idea opens the orchestrator's chat and sends the idea.
   const [active, setActive] = useState<{ project: Project; focusNodeId?: string; initialPrompt?: string } | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // strict mode runs effects twice; the code is single-use
   const oauthStarted = useRef(false);
@@ -63,7 +67,8 @@ export default function Home() {
     }
     // Confirm the stored token still works rather than trusting it blindly.
     getMe()
-      .then(async () => {
+      .then(async (me) => {
+        setUserId(me.id);
         const project = await projectFromUrl();
         if (project) setActive({ project });
         setLoggedIn(true);
@@ -75,6 +80,23 @@ export default function Home() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  const { items, dot, markAllRead } = useNotifications(loggedIn ? userId : null, active?.project.id ?? null);
+
+  // presence ping; re-save an existing push subscription so it binds to this account
+  useEffect(() => {
+    if (!loggedIn) return;
+    if (pushSupported()) {
+      registerServiceWorker()
+        .then(async (reg) => {
+          const ready = reg && (await navigator.serviceWorker.ready);
+          const sub = await ready?.pushManager.getSubscription();
+          if (sub) await savePushSubscription(sub.toJSON());
+        })
+        .catch(() => {});
+    }
+    return startPresence();
+  }, [loggedIn]);
 
   const openProject = (project: Project, focusNodeId?: string, initialPrompt?: string) => {
     window.history.pushState({}, "", `?project=${encodeURIComponent(project.id)}`);
@@ -98,11 +120,33 @@ export default function Home() {
     </div>
   );
 
+  const bell = (
+    <NotificationBell
+      items={items}
+      dot={dot}
+      onOpenPanel={markAllRead}
+      onOpenProject={async (id) => {
+        if (active?.project.id === id) return;
+        const project = (await listProjects().catch(() => [] as Project[])).find((p) => p.id === id);
+        if (project) openProject(project);
+      }}
+    />
+  );
+
   if (!loggedIn) {
     return (
       <>
         {banner}
-        <LoginScreen onLoggedIn={() => setLoggedIn(true)} />
+        <LoginScreen
+          onLoggedIn={() => {
+            getMe()
+              .then((me) => {
+                setUserId(me.id);
+                setLoggedIn(true);
+              })
+              .catch(() => setLoggedIn(true));
+          }}
+        />
       </>
     );
   }
@@ -111,7 +155,10 @@ export default function Home() {
     return (
       <>
         {banner}
-        <ProjectsScreen onOpen={openProject} onLoggedOut={() => setLoggedIn(false)} />
+        <ProjectsScreen onOpen={openProject} onLoggedOut={() => {
+          setUserId(null);
+          setLoggedIn(false);
+        }} bell={bell} />
       </>
     );
   }
@@ -119,7 +166,7 @@ export default function Home() {
   return (
     <>
       {banner}
-      <MeshCanvas project={active.project} focusNodeId={active.focusNodeId} initialPrompt={active.initialPrompt} onBack={closeProject} />
+      <MeshCanvas key={active.project.id} project={active.project} focusNodeId={active.focusNodeId} initialPrompt={active.initialPrompt} onBack={closeProject} bell={bell} />
     </>
   );
 }
