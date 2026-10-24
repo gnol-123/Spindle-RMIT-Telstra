@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authToken, listNotifications, markNotificationsRead } from "./api";
-import { markProjectRead, unreadElsewhere, upsert } from "./notifications";
+import { markProjectRead, mergeSnapshot, unreadElsewhere, upsert } from "./notifications";
 import { subscribeNotifications } from "./realtime";
 import type { AppNotification } from "./types";
 
@@ -12,26 +12,33 @@ const markLocal = (list: AppNotification[], projectId: string | null): AppNotifi
 export function useNotifications(userId: string | null, activeProjectId: string | null) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const activeRef = useRef(activeProjectId);
-  activeRef.current = activeProjectId;
+  // committed value only; callbacks read it
+  useEffect(() => {
+    activeRef.current = activeProjectId;
+  }, [activeProjectId]);
 
   useEffect(() => {
-    if (!userId) {
-      setItems([]);
-      return;
-    }
+    // fresh per user: the merge below must never keep another account's rows
+    setItems([]);
+    if (!userId) return;
     let stopped = false;
-    const load = () =>
-      listNotifications(100)
+    // only the latest load may land
+    let seq = 0;
+    const load = () => {
+      const mine = ++seq;
+      return listNotifications(100)
         .then((rows) => {
-          if (stopped) return;
+          if (stopped || mine !== seq) return;
           const active = activeRef.current;
           // arrived while offline: read on the server too
           if (active && rows.some((r) => r.read_at === null && r.project_id === active)) {
             markNotificationsRead(active).catch(() => {});
           }
-          setItems(markProjectRead(rows, active));
+          const snap = markProjectRead(rows, active);
+          setItems((prev) => mergeSnapshot(prev, snap));
         })
         .catch(() => {});
+    };
     void load();
 
     const onRow = (row: AppNotification, event: "INSERT" | "UPDATE") => {

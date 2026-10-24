@@ -46,6 +46,7 @@ export default function NotificationBell({
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [footer, setFooter] = useState<Footer>("none");
   const [busy, setBusy] = useState(false);
+  const [enableError, setEnableError] = useState(false);
   const opening = useRef(false);
 
   const toggle = () => {
@@ -63,11 +64,16 @@ export default function NotificationBell({
 
   const enable = async () => {
     setBusy(true);
+    setEnableError(false);
+    // enablePush first: iOS needs the tap gesture for the permission prompt
+    let result: Awaited<ReturnType<typeof enablePush>> | "error";
     try {
-      await enablePush();
+      result = await enablePush();
     } catch {
-      // stays offered; user can retry
+      result = "error";
     }
+    // denied shows via footerState; these stay offered for a retry
+    setEnableError(result === "unavailable" || result === "error");
     setFooter(await footerState().catch(() => "none" as Footer));
     setBusy(false);
   };
@@ -129,13 +135,20 @@ export default function NotificationBell({
             {footer !== "none" && (
               <div className="border-t border-white/[0.09] px-4 py-2">
                 {footer === "enable" && (
-                  <button
-                    onClick={enable}
-                    disabled={busy}
-                    className="w-full min-h-[44px] text-xs text-accent hover:text-text disabled:opacity-50"
-                  >
-                    Turn on iPad notifications
-                  </button>
+                  <>
+                    <button
+                      onClick={enable}
+                      disabled={busy}
+                      className="w-full min-h-[44px] text-xs text-accent hover:text-text disabled:opacity-50"
+                    >
+                      Turn on iPad notifications
+                    </button>
+                    {enableError && (
+                      <p role="alert" className="pb-2 text-center text-[11.5px] text-red-400">
+                        Couldn't turn on notifications. Try again in a moment.
+                      </p>
+                    )}
+                  </>
                 )}
                 {footer === "home" && <p className="py-2 text-[11.5px] text-muted">Add Spindle to your Home Screen to get push notifications.</p>}
                 {footer === "blocked" && <p className="py-2 text-[11.5px] text-muted">Notifications are blocked. Turn them on in iPad Settings.</p>}

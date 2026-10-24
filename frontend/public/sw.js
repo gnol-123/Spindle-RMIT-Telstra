@@ -21,7 +21,15 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || "/";
+  // same origin only; anything else opens the app root
+  const raw = event.notification.data && event.notification.data.url;
+  let url = "/";
+  try {
+    const u = new URL(typeof raw === "string" ? raw : "/", self.location.origin);
+    if (u.origin === self.location.origin) url = u.href;
+  } catch (e) {
+    url = "/";
+  }
   event.waitUntil((async () => {
     const [client] = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (!client) return self.clients.openWindow(url);

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { loadAuth, saveAuth } from "@/lib/auth";
-import { completeOAuth, getMe, listProjects, savePushSubscription } from "@/lib/api";
+import { ApiError, completeOAuth, getMe, listProjects, savePushSubscription } from "@/lib/api";
 import { pushSupported, registerServiceWorker, startPresence } from "@/lib/push";
 import { useNotifications } from "@/lib/useNotifications";
 import { Project } from "@/lib/types";
@@ -81,6 +81,29 @@ export default function Home() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  // logged in without a user id (login, or /auth/me failed): keep asking with
+  // backoff; a 401 means the session is gone, so log out
+  useEffect(() => {
+    if (!loggedIn || userId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (n: number) =>
+      getMe()
+        .then((me) => {
+          if (!stopped) setUserId(me.id);
+        })
+        .catch((err) => {
+          if (stopped) return;
+          if (err instanceof ApiError && err.status === 401) return setLoggedIn(false);
+          timer = setTimeout(() => attempt(n + 1), Math.min(30_000, 2_000 * 2 ** n));
+        });
+    attempt(0);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [loggedIn, userId]);
+
   const { items, dot, markAllRead } = useNotifications(loggedIn ? userId : null, active?.project.id ?? null);
 
   // presence ping; re-save an existing push subscription so it binds to this account
@@ -137,16 +160,7 @@ export default function Home() {
     return (
       <>
         {banner}
-        <LoginScreen
-          onLoggedIn={() => {
-            getMe()
-              .then((me) => {
-                setUserId(me.id);
-                setLoggedIn(true);
-              })
-              .catch(() => setLoggedIn(true));
-          }}
-        />
+        <LoginScreen onLoggedIn={() => setLoggedIn(true)} />
       </>
     );
   }

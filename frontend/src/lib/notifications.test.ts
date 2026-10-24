@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error node needs the .ts extension; tsc does not allow it
-import { groupByProject, markProjectRead, unreadElsewhere, upsert } from "./notifications.ts";
+import { groupByProject, markProjectRead, mergeSnapshot, unreadElsewhere, upsert } from "./notifications.ts";
 import type { AppNotification } from "./types";
 
 let seq = 0;
@@ -57,4 +57,17 @@ test("markProjectRead marks only that project; null marks nothing", () => {
   const out = markProjectRead(list, "p1");
   assert.notEqual(out[0].read_at, null);
   assert.equal(out[1].read_at, null);
+});
+
+test("mergeSnapshot keeps live rows newer than the snapshot, drops older ones", () => {
+  const live = n({ id: "live", created_at: "2026-01-05T00:00:00Z" });
+  const gone = n({ id: "gone", created_at: "2026-01-01T00:00:00Z" });
+  const snap = [n({ id: "s1", created_at: "2026-01-03T00:00:00Z" })];
+  assert.deepEqual(mergeSnapshot([live, gone], snap).map((x: AppNotification) => x.id), ["live", "s1"]);
+});
+test("mergeSnapshot prefers the snapshot copy of a shared row", () => {
+  const a = n({ id: "a", created_at: "2026-01-05T00:00:00Z" });
+  const out = mergeSnapshot([a], [{ ...a, read_at: "2026-01-06T00:00:00Z" }]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].read_at, "2026-01-06T00:00:00Z");
 });

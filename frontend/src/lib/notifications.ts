@@ -29,6 +29,14 @@ export function upsert(list: AppNotification[], row: AppNotification, event: "IN
   return [row, ...list].slice(0, NOTIFICATION_CAP);
 }
 
+// fetched snapshot wins; live rows that landed mid-fetch (newer than it) survive
+export function mergeSnapshot(prev: AppNotification[], snap: AppNotification[]): AppNotification[] {
+  const ids = new Set(snap.map((r) => r.id));
+  const newest = Math.max(-Infinity, ...snap.map((r) => Date.parse(r.created_at)));
+  const newer = prev.filter((r) => !ids.has(r.id) && Date.parse(r.created_at) > newest);
+  return [...newer, ...snap].slice(0, NOTIFICATION_CAP);
+}
+
 // local read mark for one project; null (no project open) marks nothing
 export function markProjectRead(list: AppNotification[], projectId: string | null): AppNotification[] {
   if (projectId === null) return list;

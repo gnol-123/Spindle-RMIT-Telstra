@@ -144,8 +144,12 @@ export async function login(email: string, password: string) {
 }
 
 export async function logout() {
-  // drop this device's push sub while the token is still valid
-  await import("./push").then((m) => m.disablePush()).catch(() => {});
+  // drop this device's push sub while the token is still valid; capped so a
+  // stalled push service can't hold up logout
+  await Promise.race([
+    import("./push").then((m) => m.disablePush()),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]).catch(() => {});
   try {
     // Raw fetch, not request(): refreshing a session we are about to throw
     // away just to say goodbye is wasted work.
