@@ -662,6 +662,9 @@ async def _finalise(
         # Kept on a pause: an approved resume that dies restarts from it.
         await _clear_checkpoint(repo, run.message.id)
         await _set_node_status(repo, run.node_id, "ready")
+    from app.services import push
+
+    push.kick()
     return message
 
 

@@ -8,6 +8,7 @@ from fastapi import Depends
 
 from app.config import settings
 from app.repositories.environment_repo import EnvironmentRepository
+from app.repositories.notification_repo import NotificationRepository
 from app.repositories.preview_repo import PreviewRepository
 from app.repositories.project_repo import ProjectRepository
 from app.repositories.tool_repo import ToolRepository
@@ -51,6 +52,14 @@ def get_preview_repository(auth: CurrentAuth) -> PreviewRepository:
 
 
 PreviewRepo = Annotated[PreviewRepository, Depends(get_preview_repository)]
+
+
+def get_notification_repository(auth: CurrentAuth) -> NotificationRepository:
+    """Notification repository scoped to the caller, so RLS applies."""
+    return NotificationRepository(get_user_client(auth.token), auth.user.id)
+
+
+NotificationRepo = Annotated[NotificationRepository, Depends(get_notification_repository)]
 
 
 @dataclass(frozen=True)

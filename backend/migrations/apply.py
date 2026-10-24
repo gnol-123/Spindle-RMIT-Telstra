@@ -39,6 +39,7 @@ MIGRATIONS = [
     "telstra_design.sql",
     "scope_report.sql",
     "durability.sql",
+    "notifications.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
@@ -49,8 +50,11 @@ EXPECTED_TABLES = [
     "messages",
     "node_secrets",
     "nodes",
+    "notifications",
     "previews",
     "projects",
+    "push_deliveries",
+    "push_subscriptions",
     "tool_calls",
     "tool_presets",
     "tool_types",

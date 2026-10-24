@@ -26,6 +26,7 @@ creates, so run it second.
 | `telstra_design.sql` | Telstra Design skill and prompt for the UX/UI agent, backfilled. Run nineteenth. |
 | `scope_report.sql` | Scope Report skill, reworked Scoping Brief, new Project Scoping prompt and defaults, backfilled. Run twentieth. |
 | `durability.sql` | `messages.parent_message_id`, `resume_count` and `cancel_requested`, and the service-only `turn_checkpoints` table (history plus replayed approvals) for resuming turns after a redeploy. Run twenty-first. |
+| `notifications.sql` | `notifications` (bell, filled by a trigger on assistant status changes), `push_subscriptions` and the service-only `push_deliveries` outbox, the `upsert_push_subscription` and `claim_push_batch` RPCs, and realtime for `notifications`. Run twenty-second. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying

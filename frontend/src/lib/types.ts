@@ -321,3 +321,17 @@ export interface UsageTotals {
   output_tokens: number;
   message_count: number;
 }
+
+export interface AppNotification {
+  id: string;
+  project_id: string;
+  node_id: string;
+  message_id: string;
+  status: "complete" | "failed" | "awaiting_approval";
+  node_name: string;
+  project_name: string;
+  nested: boolean;
+  excerpt: string | null;
+  read_at: string | null;
+  created_at: string;
+}
