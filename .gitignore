@@ -1,2 +1,54 @@
 # Internal design notes: brainstorming only, not for the repo or the image.
 docs/CANVAS_DESIGN_NOTES.md
+
+# Planning and design docs, local only.
+docs/EDGES_PLAN.md
+docs/TOOLS_PLAN.md
+docs/OAUTH_TOOLS_PLAN.md
+docs/DEFAULTS_PLAN.md
+docs/ARCHITECTURE.html
+docs/SYSTEM_GUIDE.html
+docs/deep/
+docs/superpowers/
+
+# Subagent execution workspace: ledger, briefs, reports, review packages.
+.superpowers/
+
+# Frontend. Owned by another dev; local experiments are not committed.
+# NOTE: 33 files under frontend/ are already tracked, and git keeps tracking
+# what it already knows. This rule only stops NEW frontend files.
+
+# Old copy of the backend suite, superseded by backend/tests/.
+backend/tests-durable/
+
+#Test Frontend
+test-frontend.html
+
+# Agent handoff notes and plans, local only.
+docs/HANDOFF_*.md
+docs/*_PLAN.md
+/PLAN*.md
+frontend/AGENTS.md
+frontend/CLAUDE.md
+
+# Agent tooling and skills.
+.agents/
+.claude/
+.lavish/
+.playwright-mcp/
+skills-lock.json
+
+# Dev server and build artifacts.
+frontend/*.log
+frontend/tsconfig.tsbuildinfo
+frontend/.next/
+frontend/out/
+*.stackdump
+
+# npm is the lockfile of record; pnpm runs are local.
+frontend/pnpm-lock.yaml
+/pnpm-lock.yaml
+
+# Frontend scratch pages.
+frontend/login-test.html
+frontend/tools-test.html
