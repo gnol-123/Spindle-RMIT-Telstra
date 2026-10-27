@@ -746,7 +746,7 @@ async def start_turn(
 
     ``parent_message_id`` is the orchestrator row a nested turn runs under.
     A resume rewrites it, so a user-driven resume is top level again. Sent
-    only when set or clearing one, so it works on a schema without the column (see 20261027000001_schema.sql).
+    only when set or clearing one, so it works on a schema without the column.
     """
     from anyio import to_thread
     from pydantic_ai.messages import ModelMessagesTypeAdapter

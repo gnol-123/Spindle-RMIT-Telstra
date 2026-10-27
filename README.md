@@ -183,7 +183,7 @@ Runs survive a redeploy too. Each model step is checkpointed, and the next backe
   </tr>
 </table>
 
-For every diagram in detail, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The HTTP API is documented in [docs/API.md](docs/API.md). The database ERD is in [docs/erd](docs/erd) (PNG, SVG and Mermaid source).
+For every diagram in detail, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The HTTP API is documented in [docs/API.md](docs/API.md). The database ERD is in [docs/erd](docs/erd).
 
 ---
 
