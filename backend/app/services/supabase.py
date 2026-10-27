@@ -71,7 +71,7 @@ def get_user_client(jwt: str) -> Client:
 
     The bearer token is attached as the Authorization header, which PostgREST
     reads to populate ``auth.uid()``. So the RLS policies in
-    ``migrations/rls.sql`` apply.
+    ``supabase/migrations/20261027000003_security.sql`` apply.
 
     Client is not cached, JWT is rotated per request,
     Caching would cause unbounded memory growth

@@ -24,26 +24,17 @@ alter table public.nodes add constraint nodes_status_valid
   check (status in ('pending', 'provisioning', 'ready', 'error', 'stopped', 'running'));
 
 -- Realtime opt-in. Postgres Changes enforces RLS per subscriber, so the
--- select policies must exist before the tables are published.
+-- select policy must exist before the table is published.
+-- Not messages or tool_calls: turns stream over SSE (see realtime_trim.sql).
 do $$
 begin
-  if not exists (select 1 from pg_policies where tablename = 'nodes' and policyname = 'nodes_select')
-     or not exists (select 1 from pg_policies where tablename = 'messages' and policyname = 'messages_select')
-     or not exists (select 1 from pg_policies where tablename = 'tool_calls' and policyname = 'tool_calls_select_own') then
-    raise exception 'apply rls.sql and tools.sql before turns.sql';
+  if not exists (select 1 from pg_policies where tablename = 'nodes' and policyname = 'nodes_select') then
+    raise exception 'apply rls.sql before turns.sql';
   end if;
 
   if not exists (select 1 from pg_publication_tables
                  where pubname = 'supabase_realtime' and tablename = 'nodes') then
     alter publication supabase_realtime add table public.nodes;
-  end if;
-  if not exists (select 1 from pg_publication_tables
-                 where pubname = 'supabase_realtime' and tablename = 'messages') then
-    alter publication supabase_realtime add table public.messages;
-  end if;
-  if not exists (select 1 from pg_publication_tables
-                 where pubname = 'supabase_realtime' and tablename = 'tool_calls') then
-    alter publication supabase_realtime add table public.tool_calls;
   end if;
 end
 $$;

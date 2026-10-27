@@ -119,7 +119,7 @@ conversation.
     "default_presets": ["brave_search", "research_method"] } ]
 ```
 Seeded: `market_research`, `project_scoping`, `coding`, `ux_ui`, `orchestrator`.
-Adding one is a SQL insert, not a deploy. See `backend/migrations/README.md`.
+Adding one is a SQL insert, not a deploy. See `backend/supabase/README.md`.
 
 `default_presets` is a list of preset slugs this agent type comes pre-equipped
 with.
@@ -1300,7 +1300,7 @@ Four stages, and only the first is in the agent code:
    for that turn, alongside `model` and `status`. One row per assistant turn.
 
 3. **Roll up.** A Postgres trigger, `messages_usage_rollup` in
-   `migrations/usage.sql`, fires on that insert and adds the row's tokens into
+   `backend/supabase/migrations/20261027000001_schema.sql`, fires on that insert and adds the row's tokens into
    `usage_totals`, keyed `(project_id, owner_id, model)`. Nothing in Python
    maintains this table: the write is the insert in stage 2, and the database
    does the rest. This follows `conversations.message_count`, which is kept

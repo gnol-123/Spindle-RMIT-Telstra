@@ -15,7 +15,7 @@ creates, so run it second.
 | `provider.sql` | Switches the default model provider to Ollama, adds the per-node `model` override. Run eighth. |
 | `usage.sql` | Token usage columns on messages and the usage_totals rollup. Run ninth. |
 | `orchestrator.sql` | Canvas tool type and preset, the orchestrator agent type and its prompt. Run tenth. |
-| `turns.sql` | Progressive turn persistence: status constraints, `messages.sender_node_id`, and realtime publication for nodes, messages, tool_calls. Run eleventh. |
+| `turns.sql` | Progressive turn persistence: status constraints, `messages.sender_node_id`, and realtime publication for nodes. Run eleventh. |
 | `pitch.sql` | Scrutinizer and evaluator agent types, pitch scrutiny skill preset. Run twelfth. |
 | `runtime.sql` | `messages.heartbeat_at` for stale turn detection, per agent type `request_limit`. Run thirteenth. |
 | `design_skills.sql` | Design Taste, Impeccable and Emil Design Engineering skill presets, wired onto UX/UI and Scrutinizer. Run fourteenth. |
@@ -27,34 +27,38 @@ creates, so run it second.
 | `scope_report.sql` | Scope Report skill, reworked Scoping Brief, new Project Scoping prompt and defaults, backfilled. Run twentieth. |
 | `durability.sql` | `messages.parent_message_id`, `resume_count` and `cancel_requested`, and the service-only `turn_checkpoints` table (history plus replayed approvals) for resuming turns after a redeploy. Run twenty-first. |
 | `notifications.sql` | `notifications` (bell, filled by a trigger on assistant status changes), `push_subscriptions` and the service-only `push_deliveries` outbox, the `upsert_push_subscription` and `claim_push_batch` RPCs, and realtime for `notifications`. Run twenty-second. |
+| `realtime_trim.sql` | Unpublishes `messages` and `tool_calls` from realtime (nothing subscribes; turns stream over SSE). Run twenty-third. |
 | `apply.py` | Runs them all, in order, in one transaction. |
 
 ## Applying
 
 ### Script
 
-From `backend/`, with `DBOS_DATABASE_URL` set in `.env`:
+From `backend/`, with `DBOS_DATABASE_URL` set in `.env` (the Supabase session
+pooler connection string; the name outlived DBOS) and `psycopg` installed from
+`requirements-dev.txt`:
 
 ```
 python migrations/apply.py --dry-run   # apply, report, then roll back
 python migrations/apply.py             # apply for real
 ```
 
-Both files run in one transaction, so a failure part-way rolls the whole thing
-back rather than leaving the schema half-built. Use `--dry-run` first to see
-what you would get.
+Every file runs in one transaction (the script strips each file's own
+`begin`/`commit`), so a failure part-way rolls the whole thing back rather than
+leaving the schema half-built. Use `--dry-run` first to see what you would get.
 
 ### By hand
 
-Or paste them into the Supabase **SQL Editor**, `init.sql` first. Run each and
-confirm success before the next.
+Or paste them into the Supabase **SQL Editor** in the order above. Each file
+wraps itself in `begin`/`commit`. Run each and confirm success before the next.
 
-Either way, both files are safe to re-run: they use `if not exists`,
+Either way, every file is safe to re-run: they use `if not exists`,
 `create or replace`, `drop policy if exists`, and `on conflict do nothing`, so
 applying twice is a no-op rather than an error.
 
-They are separate files on purpose. Policies get iterated on far more often
-than the schema, and a typo in a policy should not roll back your tables.
+Schema and policies are separate files on purpose. Policies get iterated on far
+more often than the schema, and a typo in a policy should not roll back your
+tables.
 
 ## After applying: verify tenant isolation
 
@@ -90,7 +94,15 @@ projects
    └── nodes ──< edges >── nodes
          │  kind: agent | environment | tool
          │
-         └── conversations (agent nodes only) ──< messages
+         ├── node_secrets ──> vault.secrets
+         ├── previews (environment nodes)
+         └── conversations (agent nodes only)
+               ├──< messages ──o turn_checkpoints
+               │      └──< notifications ──< push_deliveries >── push_subscriptions
+               └──< tool_calls
+
+projects ──< usage_totals (per owner, per model; rolled up from messages)
+tool_types ──< tool_presets (copied into nodes.config on create)
 ```
 
 `agent_types` and `tool_types` are **catalogs of templates**. A node is an
@@ -137,12 +149,17 @@ where e.kind = 'context';
 An insert, not a deploy:
 
 ```sql
-insert into public.agent_types (slug, name, description, system_prompt, model, sort_order)
+insert into public.agent_types
+  (slug, name, description, system_prompt, model, sort_order, default_presets)
 values ('legal_review', 'Legal Review', 'Flags contractual risk.',
-        'You are a contracts analyst...', 'gemini-3-flash-preview', 40);
+        'You are a contracts analyst...', 'deepseek-v4.1-flash', 40,
+        array['web_fetch', 'source_grading']);
 ```
 
-The slug must match `^[a-z][a-z0-9_]{1,48}[a-z0-9]$`.
+The slug must match `^[a-z][a-z0-9_]{1,48}[a-z0-9]$`. `default_presets` lists
+`tool_presets` slugs wired onto each new node; an unknown slug is skipped.
+`request_limit` caps model requests per turn (null uses the backend setting).
+A node can override `model` on its own row.
 
 **Retiring one is `is_active = false`, never `DELETE`.** Nodes reference the
 catalogs with `on delete restrict` precisely so that removing a template cannot
@@ -151,8 +168,10 @@ cascade away user transcripts.
 ## Adding a tool type
 
 Same idea. `config_schema` drives the form the user sees when they click the
-box; `secret_fields` names the values that must go to `node_secrets` and never
-be returned by the API.
+box; `secret_fields` names the values that go to Vault (via `node_secrets`) and
+are never returned by the API. `auth_kind` is `token` (password field) or
+`oauth2` (Connect button). Ready-made configurations of a type go in
+`tool_presets`.
 
 ```sql
 insert into public.tool_types (slug, name, description, config_schema, secret_fields)
@@ -165,11 +184,17 @@ values ('github', 'GitHub', 'Read and write repositories.',
 ## Notes
 
 - Everything lives in `public`.
-- **Tool credentials are stored in plain text** in `node_secrets` today. They
-  are isolated by RLS and kept out of the `nodes` row so a `select *` cannot
-  leak them, but encryption at rest (pgsodium / Supabase Vault) is still an
-  open follow-up.
-- `RLS` is enforced only because `SUPABASE_KEY` is the publishable/anon key.
-  A service-role key is `BYPASSRLS`, and every policy here would be silently
-  inert. The backend also filters by owner on every query, which is the
-  safety net if that ever changes.
+- **Tool credentials live in Supabase Vault.** `node_secrets` holds only the
+  key name and a `vault_secret_id`; read and write through `set_node_secret` /
+  `get_node_secret` (`tools.sql`). Values never sit on the `nodes` row.
+- **Two clients, two trust levels.** User requests go through `SUPABASE_KEY`
+  (publishable/anon) plus the user's JWT, so RLS applies. The service client
+  (`SUPABASE_SERVICE_KEY`) is `BYPASSRLS` and is used for Vault, turn recovery,
+  the push outbox and previews. The backend filters by owner on every query
+  either way.
+- **Service-only tables** (`turn_checkpoints`, `push_deliveries`) have RLS
+  forced on with no client policies, so only the service client reaches them.
+- **Realtime** publishes `nodes`, `edges` and `notifications`. Turns stream
+  over SSE, so `messages` and `tool_calls` are not published.
+- `owner_id` on every tenant table is set by trigger from the parent row,
+  never by the client.

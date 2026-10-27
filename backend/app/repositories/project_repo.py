@@ -1104,7 +1104,7 @@ class ProjectRepository:
         )
 
     def latest_message_with_status(self, conversation_id: str, status: str) -> Message | None:
-        # "*": the durability columns when durability.sql is applied, no error when not.
+        # "*": the durability columns (see 20261027000001_schema.sql).
         rows = (
             self._db.table("messages")
             .select("*")

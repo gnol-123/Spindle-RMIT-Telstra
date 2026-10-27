@@ -10,6 +10,10 @@ select = ["E", "F", "I", "B", "UP", "S"]
 # S105: "bearer" is the OAuth token_type value, not a password.
 "app/routers/auth.py" = ["S105"]
 
+[tool.ruff.lint.isort]
+# backend/supabase/ is the CLI migrations folder, not the supabase package.
+known-third-party = ["supabase"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

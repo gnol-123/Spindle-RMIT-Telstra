@@ -40,6 +40,7 @@ MIGRATIONS = [
     "scope_report.sql",
     "durability.sql",
     "notifications.sql",
+    "realtime_trim.sql",
 ]
 HERE = pathlib.Path(__file__).parent
 
