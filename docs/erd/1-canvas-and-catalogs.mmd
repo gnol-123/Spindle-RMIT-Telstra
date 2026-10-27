@@ -1,0 +1,99 @@
+erDiagram
+  auth_users ||--o{ projects : owns
+  projects ||--o{ nodes : contains
+  projects ||--o{ edges : contains
+  agent_types |o--o{ nodes : "template (kind=agent)"
+  tool_types |o--o{ nodes : "template (kind=tool)"
+  tool_types ||--o{ tool_presets : "preset of"
+  agent_types }o..o{ tool_presets : "default_presets (slugs)"
+  nodes ||--o{ edges : "source_node_id"
+  nodes ||--o{ edges : "target_node_id"
+  nodes ||--o{ node_secrets : has
+  node_secrets |o..|| vault_secrets : "vault_secret_id"
+  projects ||--o{ previews : has
+  nodes ||--o{ previews : "env_node_id"
+  nodes |o..o{ previews : "agent_node_id"
+
+  auth_users { uuid id PK }
+  projects {
+    uuid id PK
+    uuid owner_id FK
+    text name "unique per owner while not archived"
+    text description
+    timestamptz archived_at
+    timestamptz canvas_snapshot_at
+  }
+  agent_types {
+    uuid id PK
+    text slug UK
+    text name
+    text system_prompt
+    text model
+    text_array default_presets "tool_presets slugs"
+    int request_limit
+    int sort_order
+    bool is_active
+  }
+  tool_types {
+    uuid id PK
+    text slug UK
+    text name
+    jsonb config_schema
+    text_array secret_fields
+    text auth_kind "token | oauth2"
+    bool is_active
+  }
+  tool_presets {
+    uuid id PK
+    text slug UK
+    uuid tool_type_id FK
+    jsonb config "copied into nodes.config"
+    bool is_active
+  }
+  nodes {
+    uuid id PK
+    uuid project_id FK
+    uuid owner_id FK
+    text kind "agent | environment | tool"
+    uuid agent_type_id FK "agent only"
+    uuid tool_type_id FK "tool only"
+    text name
+    float position_x
+    float position_y
+    jsonb config
+    text model "agent override, null = inherit"
+    text tool_policy "ask | auto"
+    text status
+    text status_detail
+    timestamptz last_checked_at
+  }
+  edges {
+    uuid id PK
+    uuid project_id FK
+    uuid owner_id FK
+    uuid source_node_id FK
+    uuid target_node_id FK
+    text kind "context | tool | environment"
+    text summary "context only"
+    bigint summarised_through_seq "context only"
+    timestamptz summary_updated_at
+    int summary_max_words
+  }
+  node_secrets {
+    uuid id PK
+    uuid node_id FK
+    uuid owner_id FK
+    text key "unique per node"
+    uuid vault_secret_id
+  }
+  vault_secrets { uuid id PK "vault schema" }
+  previews {
+    uuid id PK
+    uuid project_id FK
+    uuid env_node_id FK
+    int port "unique per env node"
+    text path
+    text title
+    uuid agent_node_id "no FK"
+    text thumbnail_path
+  }

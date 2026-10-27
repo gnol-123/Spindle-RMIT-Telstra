@@ -13,7 +13,8 @@
   <a href="#a-look-inside">A look inside</a> ·
   <a href="#what-you-walk-away-with">What you walk away with</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="#under-the-hood">Under the hood</a>
+  <a href="#under-the-hood">Under the hood</a> ·
+  <a href="#running-it">Running it</a>
 </p>
 
 ---
@@ -144,13 +145,16 @@ The agent reads its arrows, then starts answering. Partway through it may call a
 
 If the agent is set to *ask first*, it pauses at the tool and waits for your OK. That pause is saved in the database, so you can approve it minutes later, even after a server restart, and it picks up where it left off.
 
+Runs survive a redeploy too. Each model step is checkpointed, and the next backend to come up picks up any run that stopped heartbeating and carries on. A pipeline continues with its next agent.
+
 ### Built in
 
 - **Secret keys stay secret.** API keys live encrypted in Supabase Vault. Agents never see them and nobody can read them back.
 - **Your projects are yours.** Postgres row-level security filters every query by owner. Someone else's project returns "not found", as if it doesn't exist.
 - **A broken tool doesn't break the chat.** A misconfigured tool is reported as unavailable and the agent carries on without it.
 - **Bad keys show up early.** Tools are checked when you save them, so a typo turns the card red before a conversation starts.
-- **Spend is tracked.** Token usage is recorded per project and per model, with per-user caps.
+- **Spend is tracked.** Token usage is recorded per project, per user and per model.
+- **You hear when a run finishes.** A bell lists finished, failed and waiting-for-approval turns, and the installed app sends a push notification (iPad Home Screen included).
 
 ---
 
@@ -179,7 +183,74 @@ If the agent is set to *ask first*, it pauses at the tool and waits for your OK.
   </tr>
 </table>
 
-For every diagram in detail, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The HTTP API is documented in [docs/API.md](docs/API.md).
+For every diagram in detail, open [docs/SYSTEM_GUIDE.html](docs/SYSTEM_GUIDE.html) in a browser. The HTTP API is documented in [docs/API.md](docs/API.md). The database ERD is in [docs/erd](docs/erd) (PNG, SVG and Mermaid source).
+
+---
+
+## Running it
+
+### You need
+
+- Python 3.12 and Node 22.18 or newer
+- Docker, for a local Supabase (`npx supabase start`). Not needed for hosted only.
+- A Supabase project
+- A model key: `OLLAMA_API_KEY` (default provider) or `GEMINI_API_KEY` with `LLM_PROVIDER=gemini`
+- An [E2B](https://e2b.dev) key for sandboxes. Without it, agents run but can't write files, run code or show previews.
+
+Everything else (Brave, Context7, Google OAuth, Web Push, Jev) is optional. Each is described in [backend/.env.example](backend/.env.example).
+
+### 1. Database
+
+Install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), or use `npx supabase`. Run these from `backend/`.
+
+```
+npx supabase start                        # local: starts Postgres and applies the migrations
+npx supabase login                        # hosted: sign in to the CLI,
+npx supabase link --project-ref <ref>     # link the project,
+npx supabase db push                      # then apply the migrations
+```
+
+See [backend/supabase/README.md](backend/supabase/README.md) for the schema and a tenant isolation check.
+
+Google sign-in, hosted only (local is email/password: `config.toml` has no Google provider):
+
+- Create a Google Cloud OAuth client and enter its id and secret in the Supabase Google provider.
+- Add `https://<ref>.supabase.co/auth/v1/callback` as an authorized redirect URI in Google.
+- Add the frontend URL under **Authentication > URL Configuration**, and set the backend's `OAUTH_REDIRECT_URL`.
+
+### 2. Backend
+
+From the repo root:
+
+```
+cd backend
+python -m venv .venv
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env            # then fill it in
+uvicorn app.main:app --reload --port 8000
+```
+
+`http://localhost:8000/health` should answer.
+
+### 3. Frontend
+
+```
+cd frontend
+npm install
+cp .env.example .env.local      # then fill it in
+npm run dev
+```
+
+Open `http://localhost:3000`. More in [frontend/README.md](frontend/README.md).
+
+To run both from the repo root instead: `npm install`, then `npm run dev` with the backend's virtualenv active.
+
+### Deploying
+
+The backend and an nginx proxy each deploy to Railway from their own `Dockerfile` and `railway.json` (`backend/`, `nginx/`), with health checks on `/health`. nginx sits in front of the backend with per-IP rate limits, a small response cache and the terminal WebSocket upgrade. Set its `BACKEND_HOST` to the backend's private address (`<service>.railway.internal:<port>`). `docker compose up --build` runs the same pair locally from `backend/.env`.
+
+The frontend is a standard Next.js app: `npm run build`, then `npm start`, with the same `NEXT_PUBLIC_*` variables set at build time.
 
 ---
 

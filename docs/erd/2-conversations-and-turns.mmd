@@ -1,0 +1,72 @@
+erDiagram
+  nodes ||--o| conversations : "agent nodes only"
+  conversations ||--o{ messages : transcript
+  messages |o--o{ messages : "parent_message_id (nested turn)"
+  nodes |o--o{ messages : "sender_node_id"
+  messages ||--o| turn_checkpoints : "resume state"
+  conversations ||--o{ tool_calls : logs
+  nodes ||--o{ tool_calls : "agent_node_id"
+  nodes ||--o{ tool_calls : "tool_node_id"
+
+  nodes {
+    uuid id PK
+    text kind
+  }
+  conversations {
+    uuid id PK
+    uuid node_id FK,UK
+    uuid project_id FK
+    uuid owner_id FK
+    text title
+    int message_count "trigger-maintained"
+    timestamptz last_message_at
+    jsonb pending_run "approval pause"
+    timestamptz pending_run_at
+  }
+  messages {
+    uuid id PK
+    uuid conversation_id FK
+    uuid owner_id FK
+    bigint seq "gap-free per conversation"
+    text role "user | assistant | system"
+    text status "running | complete | failed | awaiting_approval | cancelled"
+    text content
+    text error "failed only"
+    jsonb tool_calls
+    text client_token "idempotency key"
+    text model
+    int input_tokens
+    int output_tokens "includes reasoning"
+    int reasoning_tokens
+    int cache_read_tokens
+    int cache_write_tokens
+    int requests
+    uuid sender_node_id FK
+    uuid parent_message_id FK
+    timestamptz heartbeat_at
+    int resume_count
+    bool cancel_requested
+  }
+  turn_checkpoints {
+    uuid message_id PK,FK
+    uuid owner_id FK
+    jsonb history
+    jsonb approvals
+    int content_len
+    int events_len
+  }
+  tool_calls {
+    uuid id PK
+    uuid project_id FK
+    uuid owner_id FK
+    uuid conversation_id FK
+    uuid agent_node_id FK
+    uuid tool_node_id FK
+    text tool_call_id "unique per conversation"
+    text tool_name
+    jsonb arguments
+    text status
+    text result
+    text error
+    int duration_ms
+  }

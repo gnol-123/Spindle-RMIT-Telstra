@@ -63,16 +63,19 @@ Settings are defined in `app/config.py` and read from environment variables, fal
 |---|---|---|
 | `APP_NAME` | `MuruDPipeline API` | Title shown in OpenAPI and `GET /` |
 | `ENVIRONMENT` | `development` | Free-form environment label |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `gemini` |
+| `OLLAMA_BASE_URL` | `https://ollama.com/v1` | Ollama-compatible endpoint |
+| `OLLAMA_API_KEY` | _(empty)_ | Credential for the Ollama provider |
+| `SUMMARY_MODEL` | `deepseek-v4.1-flash` | Model used for context summaries |
 | `GEMINI_API_KEY` | _(empty)_ | Credential for the Google provider |
 | `GEMINI_MODEL` | `gemini-3-flash-preview` | Model ID used by the agent |
 | `SUPABASE_URL` | _(empty)_ | Supabase project URL |
 | `SUPABASE_KEY` | _(empty)_ | Publishable key. RLS applies |
-| `DBOS_DATABASE_URL` | _(empty)_ | Postgres URL, used only by `migrations/apply.py` |
 | `OAUTH_REDIRECT_URL` | _(empty)_ | Where Supabase returns the browser after Google sign-in |
-| `SUPABASE_SERVICE_KEY` | _(empty)_ | Supabase `service_role` key. **Bypasses RLS entirely.** Used at exactly one call site, decrypting tool secrets from Supabase Vault. Must never reach the frontend |
+| `SUPABASE_SERVICE_KEY` | _(empty)_ | Supabase `service_role` key. **Bypasses RLS entirely.** Used for Vault (tool secrets), turn recovery, Web Push and previews. Must never reach the frontend |
 
-`CORS_ORIGINS` is a comma-separated string, split into a list by the `cors_origin_list` property. Set it to the deployed frontend origin before going to production: the `*` default is a development convenience and is incompatible with credentialed cross-origin requests.
+`CORS_ORIGINS` is a comma-separated string, split into a list by the `cors_origin_list` property. Set it to the deployed frontend origin before going to production. `*` is incompatible with credentialed cross-origin requests.
 
 ## LLM Agent
 
