@@ -39,7 +39,7 @@ async def test_subscribe_snapshot_then_tail():
     run = _run()
     await runs.emit(run, "chunk", {"text": "he"})
     await runs.emit(run, "tool", {"name": "t", "args": {}})
-    text, events, receive = await runs.subscribe(run)
+    text, events, _retry, receive = await runs.subscribe(run)
     assert text == "he"
     # offset: where in the text the tool event landed.
     assert events == [{"name": "t", "args": {}, "offset": 2}]
@@ -53,7 +53,7 @@ async def test_subscribe_snapshot_then_tail():
 @pytest.mark.anyio
 async def test_full_subscriber_is_dropped_not_blocking():
     run = _run()
-    _, _, receive = await runs.subscribe(run)
+    _, _, _, receive = await runs.subscribe(run)
     for i in range(runs.SUBSCRIBER_BUFFER + 5):
         await runs.emit(run, "chunk", {"text": str(i)})
     assert run.subscribers == set()
@@ -65,7 +65,7 @@ async def test_full_subscriber_is_dropped_not_blocking():
 async def test_late_subscriber_gets_final_only():
     run = _run()
     await runs.close(run, "done", {"ok": True})
-    text, events, receive = await runs.subscribe(run)
+    text, events, _retry, receive = await runs.subscribe(run)
     assert [item async for item in receive] == [("done", {"ok": True})]
 
 

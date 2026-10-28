@@ -321,7 +321,7 @@ async def test_second_cancel_still_closes_subscribers(monkeypatch):
     _use_stream(monkeypatch, slow)
     repo = _BlockingRepo()
     run = await workflows.start_turn(repo, "c", "sys", "m", "hi", node_id="n", project_id="p")
-    _text, _events, receive = await runs.subscribe(run)
+    _text, _events, _retry, receive = await runs.subscribe(run)
 
     await asyncio.sleep(0.05)
     run.cancel_requested = True

@@ -6,14 +6,21 @@ Construction stays lazy: building an agent at import time crashes the whole app,
 including ``/health``, when the API key is unset.
 """
 
+import asyncio
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
 from functools import lru_cache
+from itertools import count
 
 import httpx2
 from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
-from pydantic_ai.models import Model
+from pydantic_ai.models import Model, StreamedResponse
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.ollama import OllamaProvider
 
@@ -22,6 +29,75 @@ from app.repositories.project_repo import Message
 
 # Consecutive ModelRetry failures one tool may have before the turn fails.
 TOOL_RETRIES = 3
+
+# Retries of one failed model request, and the wait before each.
+MODEL_RETRIES = 5
+MODEL_RETRY_DELAY_S = 10.0
+
+# Set per turn: awaited with each retry's payload, so the UI can count down.
+on_model_retry: ContextVar[Callable[[dict], Awaitable[None]] | None] = ContextVar(
+    "on_model_retry", default=None
+)
+
+
+def _transient(exc: Exception) -> bool:
+    """Rate limits, timeouts, 5xx and connection drops. Other 4xx fail the same way again."""
+    if isinstance(exc, ModelHTTPError):
+        return exc.status_code in (408, 429) or exc.status_code >= 500
+    return isinstance(exc, ModelAPIError)
+
+
+async def _notify(payload: dict) -> None:
+    hook = on_model_retry.get()
+    if hook is not None:
+        await hook(payload)
+
+
+async def _wait(attempt: int, exc: Exception) -> None:
+    await _notify(
+        {
+            "attempt": attempt,
+            "max": MODEL_RETRIES,
+            "delay_s": MODEL_RETRY_DELAY_S,
+            "error": str(exc)[:300],
+        }
+    )
+    await asyncio.sleep(MODEL_RETRY_DELAY_S)
+
+
+class RetryingModel(WrapperModel):
+    """Retries a request that fails before any output. Mid-stream failures still
+    fail the turn: retrying those would repeat text already sent."""
+
+    async def request(self, *args, **kwargs):
+        for attempt in count(1):
+            try:
+                response = await super().request(*args, **kwargs)
+            except Exception as exc:
+                if attempt > MODEL_RETRIES or not _transient(exc):
+                    raise
+                await _wait(attempt, exc)
+                continue
+            if attempt > 1:
+                await _notify({"recovered": True})
+            return response
+
+    @asynccontextmanager
+    async def request_stream(self, *args, **kwargs) -> AsyncGenerator[StreamedResponse]:
+        stack = AsyncExitStack()
+        for attempt in count(1):
+            try:
+                stream = await stack.enter_async_context(super().request_stream(*args, **kwargs))
+            except Exception as exc:
+                if attempt > MODEL_RETRIES or not _transient(exc):
+                    raise
+                await _wait(attempt, exc)
+                continue
+            if attempt > 1:
+                await _notify({"recovered": True})
+            break
+        async with stack:
+            yield stream
 
 
 def _model(name: str) -> Model:
@@ -54,7 +130,7 @@ def get_agent_for(system_prompt: str, model: str) -> Agent[None, str | DeferredT
     constant added to every agent, so it does not change the cache key.
     """
     return Agent(
-        _model(model),
+        RetryingModel(_model(model)),
         system_prompt=system_prompt,
         output_type=[str, DeferredToolRequests],
         # Default 1: a second bad-args call or MCP error on one tool ends the turn.

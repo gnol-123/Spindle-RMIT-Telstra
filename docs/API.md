@@ -1034,6 +1034,19 @@ empty content) whose `id` is the bubble that will fill in.
 `tool` events carry one entry of the `tool_calls` list documented above: a
 `call` when a tool is invoked, a `result` when it returns.
 
+`retry` events mean a model request failed with a 408, 429, 5xx or connection
+error before any output, and will be retried after `delay_s` (10). There are
+up to 5 retries, then the turn fails as below. Other 4xx errors and failures
+mid-stream are not retried.
+
+```
+event: retry   data: {"attempt": 1, "max": 5, "delay_s": 10.0, "error": "status_code: 503, ..."}
+event: retry   data: {"recovered": true}
+```
+
+`{"recovered": true}` means a retry got through. On attach, `start` carries
+`retry` with `delay_s` set to the time still left, if a retry is waiting.
+
 If the model fails part-way an `event: error` is emitted and the assistant
 message is still written with `status: "failed"`. The HTTP status stays `200`,
 because headers are sent before the model is called. `error` is not terminal:

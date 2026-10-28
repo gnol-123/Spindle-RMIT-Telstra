@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.toolsets import ApprovalRequiredToolset, FunctionToolset
@@ -276,3 +277,80 @@ async def test_cancel_during_setup_finalises_cancelled(monkeypatch):
     await run.task
     assert run.message.status == "cancelled"
     assert runs.get("c-setup") is None
+
+
+def _flaky(failures, status=503):
+    calls = {"n": 0}
+
+    async def stream(messages, info):
+        calls["n"] += 1
+        if calls["n"] <= failures:
+            raise ModelHTTPError(status_code=status, model_name="m", body="down")
+        yield "ok"
+
+    return stream, calls
+
+
+def _use_retrying(monkeypatch, stream_fn):
+    from app.services import agent
+
+    monkeypatch.setattr(agent, "MODEL_RETRY_DELAY_S", 0)
+
+    def fake(system_prompt, model):
+        return Agent(
+            agent.RetryingModel(FunctionModel(_unused, stream_function=stream_fn)),
+            name="t",
+            output_type=[str, DeferredToolRequests],
+        )
+
+    monkeypatch.setattr(workflows, "get_agent_for", fake)
+
+
+async def test_model_error_retried_with_countdown_events(monkeypatch):
+    stream, calls = _flaky(2)
+    _use_retrying(monkeypatch, stream)
+
+    events = [
+        (e, p)
+        async for e, p in workflows.stream_turn(
+            _Repo(), "c", "sys", "m", "hi", node_id="n", project_id="p"
+        )
+    ]
+
+    retries = [p for e, p in events if e == "retry"]
+    assert [r.get("attempt") for r in retries] == [1, 2, None]
+    assert retries[0]["max"] == 5 and "503" in retries[0]["error"]
+    assert retries[-1] == {"recovered": True}
+    assert calls["n"] == 3
+    assert events[-1][1]["assistant_message"]["status"] == "complete"
+
+
+async def test_model_retries_give_up_after_five(monkeypatch):
+    stream, calls = _flaky(99)
+    _use_retrying(monkeypatch, stream)
+
+    events = [
+        e
+        async for e, _ in workflows.stream_turn(
+            _Repo(), "c", "sys", "m", "hi", node_id="n", project_id="p"
+        )
+    ]
+
+    assert events.count("retry") == 5
+    assert calls["n"] == 6
+    assert "error" in events
+
+
+async def test_client_error_not_retried(monkeypatch):
+    stream, calls = _flaky(1, status=400)
+    _use_retrying(monkeypatch, stream)
+
+    events = [
+        e
+        async for e, _ in workflows.stream_turn(
+            _Repo(), "c", "sys", "m", "hi", node_id="n", project_id="p"
+        )
+    ]
+
+    assert "retry" not in events
+    assert calls["n"] == 1

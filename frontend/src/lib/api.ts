@@ -692,6 +692,9 @@ export interface StreamHandlers {
   // onChunk so the UI can render it as a distinct "checkpoint" in the
   // transcript rather than mixing it into the assistant's prose.
   onTool?: (data: any) => void;
+  // `event: retry` — a model request failed and is retried after `delay_s`;
+  // `{recovered: true}` once a retry got through.
+  onRetry?: (data: any) => void;
 }
 
 // Shared by streamChat (POST /chat/stream) and attachChat (GET /chat/attach)
@@ -733,6 +736,7 @@ async function consumeSSE(res: Response, handlers: StreamHandlers) {
       else if (event === "error") handlers.onError?.(parsed);
       else if (event === "approval_required") handlers.onApprovalRequired?.(parsed);
       else if (event === "tool") handlers.onTool?.(parsed);
+      else if (event === "retry") handlers.onRetry?.(parsed);
     }
   }
 }
