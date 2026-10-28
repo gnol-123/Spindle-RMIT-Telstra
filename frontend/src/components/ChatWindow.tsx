@@ -54,6 +54,14 @@ export interface LocalMessage {
   tone?: "tool" | "warn" | "ok";
 }
 
+// A model retry waiting out its delay. `until` is client epoch ms.
+export interface RetryState {
+  attempt: number;
+  max: number;
+  until: number;
+  error?: string;
+}
+
 export interface ChatState {
   messages: LocalMessage[];
   draft: string;
@@ -68,6 +76,7 @@ export interface ChatState {
   // Workspace panel: expanded or not, and which env (null = default).
   panelOpen: boolean;
   panelEnvId: string | null;
+  retry: RetryState | null;
 }
 
 export function defaultChatState(): ChatState {
@@ -81,6 +90,7 @@ export function defaultChatState(): ChatState {
     historyLoaded: false,
     panelOpen: false,
     panelEnvId: null,
+    retry: null,
   };
 }
 
@@ -127,15 +137,23 @@ function expandMessage(m: ChatMessage): LocalMessage[] {
 // Shared by POST /chat/stream, POST /chat/resume and GET /chat/attach —
 // both emit the identical SSE event shape per API.md. Each tool event closes
 // the current text bubble; the next chunk opens a new one.
+function toRetry(data: any): RetryState | null {
+  if (!data || data.recovered) return null;
+  return { attempt: data.attempt, max: data.max, until: Date.now() + data.delay_s * 1000, error: data.error };
+}
+
 function makeStreamHandlers(onChatChange: ChatUpdater, onPublish?: (toolName: string) => void): StreamHandlers {
   return {
+    // Attach mid-countdown: the snapshot carries what is left of it.
+    onStart: (data) => onChatChange((prev) => ({ ...prev, retry: toRetry(data?.retry) })),
+    onRetry: (data) => onChatChange((prev) => ({ ...prev, retry: toRetry(data) })),
     onChunk: (text) =>
       onChatChange((prev) => {
         const copy = [...prev.messages];
         const last = copy[copy.length - 1];
         if (last?.role === "assistant") copy[copy.length - 1] = { ...last, content: last.content + text };
         else copy.push({ role: "assistant", content: text, pending: true });
-        return { ...prev, messages: copy };
+        return { ...prev, messages: copy, retry: null };
       }),
     onTool: (data: ToolEvent) => {
       if (
@@ -152,7 +170,7 @@ function makeStreamHandlers(onChatChange: ChatUpdater, onPublish?: (toolName: st
           else copy.pop();
         }
         copy.push({ role: "system", tone: "tool", content: toolLabel(data) });
-        return { ...prev, messages: copy };
+        return { ...prev, messages: copy, retry: null };
       });
     },
     onDone: (data) => {
@@ -166,7 +184,7 @@ function makeStreamHandlers(onChatChange: ChatUpdater, onPublish?: (toolName: st
         const content = open?.content || tailAfterTools(final);
         const shown = final?.status === "cancelled" ? stopped(content) : content;
         if (shown) copy.push({ role: "assistant", content: shown });
-        return { ...prev, messages: copy };
+        return { ...prev, messages: copy, retry: null };
       });
     },
     onError: (data) => {
@@ -183,7 +201,7 @@ function makeStreamHandlers(onChatChange: ChatUpdater, onPublish?: (toolName: st
         const copy = [...prev.messages];
         if (copy[copy.length - 1]?.role === "assistant") copy.pop();
         copy.push({ role: "assistant", content: `⚠ ${detail}` });
-        return { ...prev, messages: copy };
+        return { ...prev, messages: copy, retry: null };
       });
     },
     onApprovalRequired: (data) => {
@@ -202,10 +220,29 @@ function makeStreamHandlers(onChatChange: ChatUpdater, onPublish?: (toolName: st
           tone: "warn",
           content: `Waiting on approval for ${data.pending_calls.length} tool call(s).`,
         });
-        return { ...prev, messages: copy, pendingCalls: data.pending_calls, approvals: initial };
+        return { ...prev, messages: copy, pendingCalls: data.pending_calls, approvals: initial, retry: null };
       });
     },
   };
+}
+
+// Ticks down to the next model retry; "now" once the wait is over.
+function RetryNotice({ retry }: { retry: RetryState }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [retry]);
+  const left = Math.max(0, Math.ceil((retry.until - now) / 1000));
+  return (
+    <div
+      title={retry.error}
+      className="flex items-center gap-[9px] px-3 py-[9px] rounded-[9px] text-[11.5px] border bg-amber/[0.06] border-amber/[0.28] text-[#FFAB91]"
+    >
+      <span className="text-[11px] text-amber anim-softpulse">⟳</span>
+      Model request failed. {left ? `Retrying in ${left}s` : "Retrying now"} (retry {retry.attempt}/{retry.max})
+    </div>
+  );
 }
 
 // -------------------- the window --------------------
@@ -243,7 +280,7 @@ export default function ChatWindow({
   initialPrompt?: string;
   onInitialPromptSent?: () => void;
 }) {
-  const { messages, draft, useStream, busy, pendingCalls, approvals, historyLoaded } = chat;
+  const { messages, draft, useStream, busy, pendingCalls, approvals, historyLoaded, retry } = chat;
   const initialSentRef = useRef(false);
   const icon = AGENT_ICONS[node.agent_slug] ?? "◆";
   const nameOf = (id: string) => nodes.find((n) => n.id === id);
@@ -323,7 +360,7 @@ export default function ChatWindow({
   useEffect(() => {
     const el = scrollRef.current;
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages, pendingCalls, staleAsk]);
+  }, [messages, pendingCalls, staleAsk, retry]);
 
   function scrollToBottom() {
     const el = scrollRef.current;
@@ -835,6 +872,7 @@ export default function ChatWindow({
               </div>
             );
           })}
+          {busy && retry && <RetryNotice retry={retry} />}
         </div>
         </div>
 

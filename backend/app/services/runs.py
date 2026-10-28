@@ -9,6 +9,7 @@ DB flag polled by the driver if the backend ever scales out.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,8 @@ class RunningTurn:
     final: tuple[str, dict] | None = None
     # The turn's ProjectRepository, for the shutdown handoff write.
     repo: Any = None
+    # Pending model retry and its monotonic deadline, for an attach mid-countdown.
+    retry: tuple[dict, float] | None = None
 
 
 _RUNS: dict[str, RunningTurn] = {}
@@ -130,19 +133,25 @@ def running_in_project(project_id: str) -> list[RunningTurn]:
     return [r for r in _RUNS.values() if r.project_id == project_id]
 
 
-async def subscribe(run: RunningTurn) -> tuple[str, list[dict], MemoryObjectReceiveStream]:
+async def subscribe(
+    run: RunningTurn,
+) -> tuple[str, list[dict], dict | None, MemoryObjectReceiveStream]:
     """Snapshot plus a stream of what follows, taken under one lock so no event
-    lands between the two."""
+    lands between the two. The retry's delay_s is what is left of it."""
     send, receive = anyio.create_memory_object_stream[tuple[str, dict]](SUBSCRIBER_BUFFER)
     async with run.lock:
         text = "".join(run.text)
         events = list(run.events)
+        retry = None
+        if run.retry is not None:
+            payload, deadline = run.retry
+            retry = {**payload, "delay_s": max(0.0, deadline - time.monotonic())}
         if run.final is not None:
             send.send_nowait(run.final)
             send.close()
         else:
             run.subscribers.add(send)
-    return text, events, receive
+    return text, events, retry, receive
 
 
 def _fan_out(run: RunningTurn, item: tuple[str, dict]) -> None:
@@ -157,6 +166,14 @@ def _fan_out(run: RunningTurn, item: tuple[str, dict]) -> None:
 
 async def emit(run: RunningTurn, event: str, payload: dict) -> None:
     async with run.lock:
+        if event == "retry":
+            run.retry = (
+                None
+                if payload.get("recovered")
+                else (payload, time.monotonic() + payload["delay_s"])
+            )
+        else:
+            run.retry = None
         if event == "chunk":
             run.text.append(payload["text"])
         elif event == "tool":

@@ -20,7 +20,12 @@ from app.repositories.project_repo import (
     ProjectRepository,
 )
 from app.services import runs
-from app.services.agent import get_agent_for, summarise_conversation, to_model_messages
+from app.services.agent import (
+    get_agent_for,
+    on_model_retry,
+    summarise_conversation,
+    to_model_messages,
+)
 from app.services.runs import RunningTurn
 
 log = logging.getLogger(__name__)
@@ -301,6 +306,8 @@ async def _stream_agent(
     capabilities = [Hooks(after_node_run=_checkpoint_hook(send))] if checkpoint else None
 
     async def drive() -> AgentTurn:
+        # Same stream as the deltas, so a retry lands in order with them.
+        on_model_retry.set(lambda payload: send.send(("retry", payload)))
         # The stream closes on any exit, so a failed run cannot hang the reader.
         try:
             if resume is not None:
@@ -896,7 +903,7 @@ async def start_turn(
                 request_limit=request_limit,
                 checkpoint=_checkpointing(),
             ):
-                if event in ("chunk", "tool"):
+                if event in ("chunk", "tool", "retry"):
                     await runs.emit(run, event, payload)
                     await flusher.maybe(force=event == "tool")
                 elif event == "checkpoint":
@@ -1116,13 +1123,15 @@ async def attach_events(run: RunningTurn) -> AsyncIterator[tuple[str, dict]]:
 
     Safe from any number of readers; a reader leaving does not touch the run.
     """
-    text, events, receive = await runs.subscribe(run)
+    text, events, retry, receive = await runs.subscribe(run)
     start: dict = {
         "conversation_id": run.conversation_id,
         "assistant_message": {**_snapshot(run), "content": text, "tool_calls": events},
     }
     if run.user_message is not None:
         start["user_message"] = _message_payload(run.user_message)
+    if retry is not None:
+        start["retry"] = retry
     yield "start", start
     async with receive:
         async for item in receive:
